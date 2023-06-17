@@ -1,4 +1,4 @@
-# Constraint Logic Programming for Procurement Optimization
+# P2CLPFD: A Constraint Logic Programming Framework for Procurement Professionals
 
 This Prolog program is used for allocating a quantity of a certain part across multiple suppliers, with the objective to minimize the total cost of ownership (TCO). It also considers sourcing strategy constraints such as maximum allowed allocation per supplier, minimum and maximum possible allocations per supplier and part, and supplier capacity constraints.
 

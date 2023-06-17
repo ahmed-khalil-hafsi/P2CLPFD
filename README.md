@@ -49,4 +49,4 @@ The procurement optimization program supports various constraints and features t
 This project is licensed under the GPLv3 License.
 
 ## Copyright
-Copyright (c) [Year] Ahmed Khalil Hafsi
+Copyright (c) 2023 Ahmed Khalil Hafsi

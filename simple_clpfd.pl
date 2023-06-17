@@ -7,7 +7,7 @@
 demand(part1,250).
 demand(part2,220).
 
-% Who can win what matrix
+% Who can win what rules
 can(part1, supplier1, 0,100).
 can(part1, supplier2,30,100).
 can(part1, supplier3,0,100).
@@ -153,15 +153,15 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     Allocations = [0, 30, 70],
 
     % Allocation for Part1
-    member(P1_P1, Allocations), Q1_P1 #= P1_P1 * D_P1 // 100,
-    member(P2_P1, Allocations), Q2_P1 #= P2_P1 * D_P1 // 100,
-    member(P3_P1, Allocations), Q3_P1 #= P3_P1 * D_P1 // 100,
+    can(part1, supplier1, Min1_P1, Max1_P1), member(P1_P1, Allocations), P1_P1 in Min1_P1..Max1_P1, Q1_P1 #= P1_P1 * D_P1 // 100,
+    can(part1, supplier2, Min2_P1, Max2_P1), member(P2_P1, Allocations), P2_P1 in Min2_P1..Max2_P1, Q2_P1 #= P2_P1 * D_P1 // 100,
+    can(part1, supplier3, Min3_P1, Max3_P1), member(P3_P1, Allocations), P3_P1 in Min3_P1..Max3_P1, Q3_P1 #= P3_P1 * D_P1 // 100,
     sum([Q1_P1, Q2_P1, Q3_P1], #=, D_P1),
 
     % Allocation for Part2
-    member(P1_P2, Allocations), Q1_P2 #= P1_P2 * D_P2 // 100,
-    member(P2_P2, Allocations), Q2_P2 #= P2_P2 * D_P2 // 100,
-    member(P3_P2, Allocations), Q3_P2 #= P3_P2 * D_P2 // 100,
+    can(part2, supplier1, Min1_P2, Max1_P2), member(P1_P2, Allocations), P1_P2 in Min1_P2..Max1_P2, Q1_P2 #= P1_P2 * D_P2 // 100,
+    can(part2, supplier2, Min2_P2, Max2_P2), member(P2_P2, Allocations), P2_P2 in Min2_P2..Max2_P2, Q2_P2 #= P2_P2 * D_P2 // 100,
+    can(part2, supplier3, Min3_P2, Max3_P2), member(P3_P2, Allocations), P3_P2 in Min3_P2..Max3_P2, Q3_P2 #= P3_P2 * D_P2 // 100,
     sum([Q1_P2, Q2_P2, Q3_P2], #=, D_P2),
 
     % Global capacity constraints

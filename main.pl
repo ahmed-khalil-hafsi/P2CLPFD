@@ -1,4 +1,4 @@
-% Constraint Logic Programming
+% Supplier Allocation Using CLP(FD)
 
 :- use_module(library(clpfd)).	% Finite domain constraints
 
@@ -8,43 +8,50 @@ demand(part1,250).
 demand(part2,220).
 
 % Who can win what rules
+
+%%% part1
 can(part1, supplier1, 0,100).
 can(part1, supplier2,30,100).
 can(part1, supplier3,0,100).
 
+%%% part2
 can(part2, _,0,100).
 
-% Global Capacity Supplier Constraints
+% Volume Constraints
+
+%%% Global Capacity Supplier Constraints
 
 global_capacity(supplier1,5000).
 global_capacity(supplier2,1000).
 global_capacity(supplier3,5000).
 
-% Global non-cost adjustments 
+%%% Global non-cost adjustments 
 
 noncost_adjustment(supplier1,0).
 noncost_adjustment(supplier2,3).
 noncost_adjustment(supplier3,-5).
 
-% Capacities for Part1
+%%% Capacities for Part1
 capacity(supplier1, part1, 1000).
 capacity(supplier2, part1, 150).
 capacity(supplier3, part1, 800).
 
-% Capacities for Part2
+%%% Capacities for Part2
 capacity(_,part2,inf).
 
-% Cost for Part1
+% Cost Facts
+
+%%% Cost for Part1
 cost(supplier1, part1, 100).
 cost(supplier2, part1, 10). 
 cost(supplier3, part1, 50).
 
-% Cost for Part 2
+%%% Cost for Part 2
 cost(supplier1, part2, 100).
 cost(supplier2, part2, 30). 
 cost(supplier3, part2, 70).
 
-% Each supplier's allocation must be one of 0, 30 or 70 percent.
+%%% Each supplier's allocation must be one of 0, 30 or 70 percent.
 possible_allocations([0, 30, 70]).
 
 % Reference Allocation Cost
@@ -143,6 +150,7 @@ allocate_with_constraints(DemandAllocationPart1,QuantityPart1,TotalCostPart1, Mi
 
 % Allocate for all parts
 global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
+
     % Demand for each part
     demand(part1, D_P1),
     demand(part2, D_P2),
@@ -150,7 +158,6 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     % For each part and supplier, determine the allocation quantity.
     % Note: The allocation for part1 is QX_P1 and for part2 is QX_P2 where X is the supplier number.
     possible_allocations(Allocations),
-    Allocations = [0, 30, 70],
 
     % Allocation for Part1
     can(part1, supplier1, Min1_P1, Max1_P1), member(P1_P1, Allocations), P1_P1 in Min1_P1..Max1_P1, Q1_P1 #= P1_P1 * D_P1 // 100,
@@ -169,7 +176,7 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     global_capacity(supplier2, GC2), Q2 #= Q2_P1 + Q2_P2, Q2 in 0..GC2,
     global_capacity(supplier3, GC3), Q3 #= Q3_P1 + Q3_P2, Q3 in 0..GC3,
 
-    Allocation = [[Q1_P1, Q2_P1, Q3_P1], [Q1_P2, Q2_P2, Q3_P2]],
+    Allocation = [[P1_P1, P2_P1, P3_P1], [P1_P2, P2_P2, P3_P2]],
 
     % Cost calculation
     cost(supplier1, part1, Cost1_P1), cost(supplier1, part2, Cost1_P2),
@@ -181,18 +188,6 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     
     % Minimize cost
     TotalCost #=< MinCost.
-
-
-
-
-
-
-  
-
-
-
-
-
 
 /** <examples> Your example queries go here, e.g.
 ?- allocate(AllocationBetweenSuppliers,100,TCO,20000),labeling([min(TCO)],AllocationBetweenSuppliers).

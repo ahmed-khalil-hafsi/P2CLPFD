@@ -189,6 +189,10 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     % Minimize cost
     TotalCost #=< MinCost.
 
-/** <examples> Your example queries go here, e.g.
-?- allocate(AllocationBetweenSuppliers,100,TCO,20000),labeling([min(TCO)],AllocationBetweenSuppliers).
+/** <examples> Queries:
+
+?- global_allocate_with_constraints(Allocation,TCO,20000),labeling([min(TCO)],Allocation).
+
+?- findall(TCO-Alloc, (global_allocate_with_constraints(Alloc,TCO,20000),labeling([],[TCO])), List),keysort(List, Sorted),Sorted = [TCO-MinAlloc|_].
+
 */

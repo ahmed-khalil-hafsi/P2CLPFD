@@ -21,10 +21,10 @@ To run this program, you will need a Prolog interpreter. This script was develop
 
 The main predicate in the program is `global_allocate_with_constraints/2`. Here is how you can use it:
 
-`?- global_allocate_with_constraints(Allocation, MinCost).`
+`?- global_allocate_with_constraints(Allocation, MaxCost).`
 
 - `Allocation` is a list of quantities to be allocated to each supplier for each part.
-- `MinCost` is the maximum allowed total cost. The program will find solutions where total cost is less than or equal to MinCost.
+- `MaxCost` is the maximum allowed total cost. The program will find solutions where total cost is less than or equal to MaxCost.
 
 Here's an example query:
 

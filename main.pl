@@ -55,7 +55,7 @@ cost(supplier3, part2, 70).
 possible_allocations([0, 30, 70]).
 
 % Reference Allocation Cost
-allocate_ref(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MinCost) :-
+allocate_ref(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MaxCost) :-
     
     % Only capacity Constraints are taken into account
     capacity(supplier1,part1,C1), Q1 in 0..C1,
@@ -72,11 +72,11 @@ allocate_ref(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MinCost) :-
     cost(supplier3,part1, CostSupplier3),
   	TotalCostPart1 #= Q1 * CostSupplier1 + Q2 * CostSupplier2 + Q3 * CostSupplier3,
 	    
-  	TotalCostPart1 #=< MinCost.
+  	TotalCostPart1 #=< MaxCost.
 
 
 % Reference Allocation Cost including non-cost elements
-allocate_ref_noncost(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MinCost) :-
+allocate_ref_noncost(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MaxCost) :-
     
     % Only capacity Constraints are taken into account
     capacity(supplier1,part1,C1), Q1 in 0..C1,
@@ -97,9 +97,9 @@ allocate_ref_noncost(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MinCost
 
   	TotalCostPart1 #= Q1 * (CostSupplier1 + NC1) + Q2 * (CostSupplier2 + NC2) + Q3 * (CostSupplier3 + NC3),
 	    
-  	TotalCostPart1 #=< MinCost.
+  	TotalCostPart1 #=< MaxCost.
 
-allocate_with_constraints(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MinCost) :-
+allocate_with_constraints(DemandAllocationPart1,QuantityPart1,TotalCostPart1, MaxCost) :-
     
     PercAllocationPart1 = [P1, P2, P3],
     possible_allocations(Allocations),
@@ -145,11 +145,11 @@ allocate_with_constraints(DemandAllocationPart1,QuantityPart1,TotalCostPart1, Mi
 	
 
     
-  	TotalCostPart1 #=< MinCost.
+  	TotalCostPart1 #=< MaxCost.
 
 
 % Allocate for all parts
-global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
+global_allocate_with_constraints(Allocation, TotalCost, MaxCost) :-
 
     % Demand for each part
     demand(part1, D_P1),
@@ -187,7 +187,7 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     TotalCost #= TotalCostPart1 + TotalCostPart2,
     
     % Minimize cost
-    TotalCost #=< MinCost.
+    TotalCost #=< MaxCost.
 
 /** <examples> Queries:
 

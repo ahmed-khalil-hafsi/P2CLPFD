@@ -23,7 +23,7 @@ cost(supplier3, part1, 50, _). % flat price
 %%% Each supplier's allocation must be one of 0, 30 or 70 percent.
 possible_allocations([0, 30, 70]).
 
-global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
+global_allocate_with_constraints(Allocation, TotalCost, MaxCost) :-
 
     % Demand for each part
     demand(part1, D_P1),
@@ -57,4 +57,4 @@ global_allocate_with_constraints(Allocation, TotalCost, MinCost) :-
     TotalCost #= TotalCostPart1,
     
     % Minimize cost
-    TotalCost #=< MinCost.
+    TotalCost #=< MaxCost.

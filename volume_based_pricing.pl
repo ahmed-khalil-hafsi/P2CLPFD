@@ -41,7 +41,11 @@ global_allocate_with_constraints(Allocation, TotalCost, MaxCost) :-
 
 
 
-    Allocation = [[selection(P1_P1,cost(supplier1,part1,Cost1_P1,VolumeBracketSupplier1)), selection(P2_P1,cost(supplier2,part1,Cost2_P1,VolumeBracketSupplier2)), selection(P3_P1,cost(supplier3,part1,Cost3_P1,VolumeBracketSupplier3))]],
+    Allocation = [[
+      selection(P1_P1,cost(supplier1,part1,Cost1_P1,VolumeBracketSupplier1)),
+      selection(P2_P1,cost(supplier2,part1,Cost2_P1,VolumeBracketSupplier2)),
+      selection(P3_P1,cost(supplier3,part1,Cost3_P1,VolumeBracketSupplier3))
+        ]],
 
     % Cost calculation
     cost(supplier1, part1, Cost1_P1,VolumeBracketSupplier1), 

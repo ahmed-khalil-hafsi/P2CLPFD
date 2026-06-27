@@ -1,52 +1,113 @@
-# P2CLPFD: A Constraint Logic Programming Framework for Procurement Professionals
+# P2CLPFD: A Constraint Logic Programming Framework for Procurement
 
-This Prolog program is used for allocating a quantity of a certain part across multiple suppliers, with the objective to minimize the total cost of ownership (TCO). It also considers sourcing strategy constraints such as maximum allowed allocation per supplier, minimum and maximum possible allocations per supplier and part, and supplier capacity constraints.
+P2CLPFD allocates demand for multiple parts across multiple suppliers while
+**minimizing the Total Cost of Ownership (TCO)**, subject to realistic
+procurement constraints: per-pair capacity, minimum order quantities (MOQ),
+sourcing-strategy share bounds, and global supplier capacity. It also folds
+non-cost adjustments (quality, logistics, risk) into the objective.
+
+It is built on SWI-Prolog's CLP(FD) library and solves the allocation as a
+finite-domain optimization problem with guaranteed optimality.
 
 ## Getting Started
 
-To run this program, you will need a Prolog interpreter. This script was developed using SWI-Prolog.
-
 ### Prerequisites
 
-- [SWI-Prolog](http://www.swi-prolog.org/Download.html)
+- [SWI-Prolog](http://www.swi-prolog.org/Download.html) (developed with v9.x)
 
-### Installing
+### Running
 
-1. Download or clone this repository to your local machine.
-2. Open SWI-Prolog.
-3. Navigate to the directory containing the Prolog script using the `cd` command in the SWI-Prolog terminal.
-4. Load the script by typing `['script.pl'].`, replacing `script.pl` with the filename of your script.
+```bash
+swipl -q -g run -g halt main.pl
+```
 
-## Using the Program
+Or interactively:
 
-The main predicate in the program is `global_allocate_with_constraints/2`. Here is how you can use it:
+```prolog
+?- ['main.pl'].
+?- run.                       % solve, pretty-print, verify
+?- solve(A, TCO).             % raw solve
+?- solve(A, TCO), print_allocation(A, TCO).
+```
 
-`?- global_allocate_with_constraints(Allocation, MaxCost).`
+## API
 
-- `Allocation` is a list of quantities to be allocated to each supplier for each part.
-- `MaxCost` is the maximum allowed total cost. The program will find solutions where total cost is less than or equal to MaxCost.
+| Predicate | Description |
+|---|---|
+| `solve(-Allocation, -TCO)` | Optimal allocation minimizing TCO. |
+| `solve(-Allocation, -TCO, +MaxCost)` | As above, with `TCO =< MaxCost`. |
+| `print_allocation(+Allocation, +TCO)` | Pretty-print + verify all constraints. |
+| `run` / `run(+MaxCost)` | Convenience: solve + print. |
 
-Here's an example query:
+`Allocation` is a list of `alloc(Part, [q(Supplier, Qty), ...])`.
 
-`?- global_allocate_with_constraints(Allocation, 20000).`
+## Fact Schema
 
-This will find an allocation of parts across the suppliers, such that the total cost does not exceed 20000 and is as low as possible.
+All quantities are **absolute integers** (not percentages). A `(Supplier, Part)`
+pair with no `cost/3` fact is simply non-allocatable (forced to 0).
 
-## Supported Features & Reasoning Constraints
+| Fact | Meaning |
+|---|---|
+| `demand(Part, Qty)` | Total quantity of Part to source. |
+| `cost(Supplier, Part, UnitCost)` | Flat unit price. Required for allocatable pairs without tiers. |
+| `price_tier(Supplier, Part, MinQty, MaxQty, UnitCost)` | Volume-based tiered pricing. Use `sup` for unbounded `MaxQty`. Tiers must be non-overlapping and cover 0..sup. Overrides `cost/3` for that pair. |
+| `capacity(Supplier, Part, MaxQty)` | Per-pair maximum. Absent = unlimited. |
+| `moq(Supplier, Part, MinQty)` | Minimum order quantity. Absent = 0. |
+| `share(Part, Supplier, MinPct, MaxPct)` | Strategy bounds as % of demand (0–100). Absent = unrestricted. |
+| `global_capacity(Supplier, MaxQty)` | Total across all parts. Absent = unlimited. |
+| `noncost_adjustment(Supplier, Adj)` | Per-unit TCO adjustment (may be negative). Absent = 0. |
 
-The procurement optimization program supports various constraints and features to fine-tune the allocation process:
+Suppliers are discovered automatically from `cost/3` facts — no need to declare them.
 
-- **Supplier Capacities and Costs:** You can modify the capacities and costs of suppliers by using the `capacity/3` and `cost/3` facts. The format is `capacity(Supplier, Part, Capacity)` and `cost(Supplier, Part, Cost)`, where `Supplier` and `Part` are atoms, `Capacity` is an integer representing the maximum quantity that the supplier can provide, and `Cost` is the cost per unit from the supplier.
+## Example
 
-- **Demand:** Specify the demand for each part using `demand/2` (format `demand(Part, Quantity)`).
+With the shipped `facts.pl` (250 units of part1, 220 of part2, three
+suppliers, tiered pricing on supplier1/part1), the optimal allocation is:
 
-- **Global Supplier Capacity:** Specify the global capacity of each supplier using `global_capacity/2` (format `global_capacity(Supplier, Capacity)`).
+```
+Part: part1
+  supplier1: 75 units  (tier unit: 40, eff unit: 40, subtotal: 3000)
+  supplier2: 150 units  (unit: 13, subtotal: 1950)
+  supplier3: 25 units  (unit: 45, subtotal: 1125)
 
-- **Allocation Ranges:** Specify the range of possible allocations for each supplier and part using `can/4` (format `can(Part, Supplier, Min, Max)`). This helps enforce sourcing strategy rules like minimum or maximum allocation to a specific supplier for a part.
+Part: part2
+  supplier2: 220 units  (unit: 33, subtotal: 7260)
+
+*** Total Cost of Ownership: 13335 ***
+```
+
+Note: the reported TCO includes non-cost adjustments (+3 for supplier2, −5 for
+supplier3), so eff-unit differs from raw cost. supplier1's 75 units fall in
+the [40, sup] tier (unit cost 40), making it attractive despite the flat
+cost of 100.
+
+## How It Works
+
+The solver builds one finite-domain variable per `(Part, Supplier)` pair, posts
+all constraints declaratively, then calls `labeling([min(TCO)], Vars)` to find
+the cost-optimal solution. Backtracking yields further solutions in increasing
+TCO order.
+
+Key constraint techniques:
+
+- **MOQ as a gap domain:** `Q in 0 \/ Moq..sup` — either order nothing or at
+  least the MOQ. This avoids fragile disjunctions and keeps propagation strong.
+- **Share bounds as integer ratios:** `MinPct * Demand #=< 100 * Q` avoids
+  floating-point and keeps everything in exact integer arithmetic.
+- **Tiered pricing via `element/3` + reified bounds:** a `TierVar` selects the
+  active price tier; `element/3` maps it to the unit cost; reified `#==>`
+  constraints enforce `Q` within the selected tier's `[Min, Max]` range. This
+  lets the solver reason about which tier is optimal without enumerating.
+- **TCO objective:** `Q * (RawUnitCost + NonCostAdjustment)` per pair, summed.
+
+## Project Layout
+
+```
+facts.pl          Data (demand, costs, capacities, strategy)
+solver.pl         The CLP(FD) engine + pretty-printer + verifier
+main.pl           Entry point: loads facts+solver, provides run/0,1
+```
 
 ## License
 
-This project is licensed under the GPLv3 License.
-
-## Copyright
-Copyright (c) 2023 Ahmed Khalil Hafsi
+GPLv3. Copyright (c) 2023 Ahmed Khalil Hafsi.

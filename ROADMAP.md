@@ -31,16 +31,16 @@ Living document of what's done and what's next. Updated as features ship.
 
 ## Prioritized roadmap
 
-### Phase 1 — Decision-support essentials (next)
+### Phase 1 — Decision-support essentials
 
-**1a. Fixed costs (NRE / tooling / setup)** — HIGH
+**1a. Fixed costs (NRE / tooling / setup)** — DONE
 
 - New fact: `fixed_cost(Supplier, Part, Amount)` — one-time charge if awarded > 0
-- Modeling: on/off decision variable `B in 0..1` per pair, reified `Q #> 0 #<==> B #= 1`, contribution `B * Amount` added to TCO
+- Modeling: on/off decision variable `B in 0..1` per pair, reified `Q #>= 1 #<==> B #= 1`, contribution `B * Amount` added to TCO
 - Effect: lets solver decide whether an award is worth the setup cost (e.g. $5k tooling to unlock a cheaper unit price)
 - Pairs without `fixed_cost/3` have B forced to 0 (no fixed cost)
 
-**1b. Risk & dual-sourcing rules** — HIGH
+**1b. Risk & dual-sourcing rules** — DONE
 
 - New facts:
   - `min_suppliers(Part, N)` — part must be split across ≥ N suppliers
@@ -49,8 +49,9 @@ Living document of what's done and what's next. Updated as features ship.
   - `dual_source(Part)` — shorthand for `min_suppliers(Part, 2)`
 - Modeling: per-pair on/off `B` vars (shared with 1a), `sum(Bs, #>=, N)` / `#=< N`
 - Effect: captures real sourcing-policy rules ("no single-source risk", "diversify top 3 suppliers")
+- Note: `forall/2` must NOT be used for CLP(FD) constraint posting — its negation-as-failure swallows constraints. Use direct recursion instead.
 
-**1c. Scenario comparison** — MEDIUM
+**1c. Scenario comparison** — NEXT
 
 - `solve_scenario(+Name, -Allocation, -TCO)` — solve against a named override set (price deltas, capacity changes, relaxed MOQs) without mutating base facts
 - `compare_scenarios(+Names, -Table)` — produce a side-by-side TCO + allocation diff
@@ -107,3 +108,4 @@ Living document of what's done and what's next. Updated as features ship.
 - Add `load.pl` single entry point
 - Guard against incomplete tier coverage (validation predicate: `validate_tiers/0`)
 - Guard against MOQ > capacity (immediate infeasibility detection)
+- NEVER use `forall/2` to post CLP(FD) constraints — use direct recursion or `maplist` instead

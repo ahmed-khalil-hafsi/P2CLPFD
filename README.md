@@ -3,8 +3,10 @@
 P2CLPFD allocates demand for multiple parts across multiple suppliers while
 **minimizing the Total Cost of Ownership (TCO)**, subject to realistic
 procurement constraints: per-pair capacity, minimum order quantities (MOQ),
-sourcing-strategy share bounds, and global supplier capacity. It also folds
-non-cost adjustments (quality, logistics, risk) into the objective.
+sourcing-strategy share bounds, global supplier capacity, fixed costs
+(NRE/tooling/setup), risk (dual-sourcing, supplier-count limits), and
+global share caps. It also folds non-cost adjustments (quality, logistics,
+risk) into the objective.
 
 It is built on SWI-Prolog's CLP(FD) library and solves the allocation as a
 finite-domain optimization problem with guaranteed optimality.
@@ -56,30 +58,35 @@ pair with no `cost/3` fact is simply non-allocatable (forced to 0).
 | `share(Part, Supplier, MinPct, MaxPct)` | Strategy bounds as % of demand (0–100). Absent = unrestricted. |
 | `global_capacity(Supplier, MaxQty)` | Total across all parts. Absent = unlimited. |
 | `noncost_adjustment(Supplier, Adj)` | Per-unit TCO adjustment (may be negative). Absent = 0. |
+| `fixed_cost(Supplier, Part, Amount)` | One-time charge (NRE/tooling) when Q > 0. Absent = 0. |
+| `min_suppliers(Part, N)` | Part must be sourced from at least N suppliers. Absent = no lower bound. |
+| `max_suppliers(Part, N)` | Part may use at most N suppliers. Absent = no upper bound. |
+| `dual_source(Part)` | Shorthand for `min_suppliers(Part, 2)`. |
+| `max_global_share(Supplier, Pct)` | Supplier may not exceed Pct% of total demand across all parts. Absent = unrestricted. |
 
 Suppliers are discovered automatically from `cost/3` facts — no need to declare them.
 
 ## Example
 
 With the shipped `facts.pl` (250 units of part1, 220 of part2, three
-suppliers, tiered pricing on supplier1/part1), the optimal allocation is:
+suppliers, tiered pricing on supplier1/part1, dual-source on part1,
+supplier2 capped at 40% of total volume), the optimal allocation is:
 
 ```
 Part: part1
-  supplier1: 75 units  (tier unit: 40, eff unit: 40, subtotal: 3000)
-  supplier2: 150 units  (unit: 13, subtotal: 1950)
-  supplier3: 25 units  (unit: 45, subtotal: 1125)
+  supplier2: 75 units  (unit: 13, subtotal: 975)
+  supplier3: 175 units  (unit: 45, subtotal: 7875)
 
 Part: part2
-  supplier2: 220 units  (unit: 33, subtotal: 7260)
+  supplier2: 113 units  (unit: 33, subtotal: 3729)
+  supplier3: 107 units  (unit: 65, subtotal: 6955)
 
-*** Total Cost of Ownership: 13335 ***
+*** Total Cost of Ownership: 19534 ***
 ```
 
 Note: the reported TCO includes non-cost adjustments (+3 for supplier2, −5 for
-supplier3), so eff-unit differs from raw cost. supplier1's 75 units fall in
-the [40, sup] tier (unit cost 40), making it attractive despite the flat
-cost of 100.
+supplier3). The global share cap (supplier2 at 40%) and dual-source requirement
+force a more balanced award, increasing TCO from ~13k (unconstrained) to ~19k.
 
 ## How It Works
 
@@ -98,7 +105,15 @@ Key constraint techniques:
   active price tier; `element/3` maps it to the unit cost; reified `#==>`
   constraints enforce `Q` within the selected tier's `[Min, Max]` range. This
   lets the solver reason about which tier is optimal without enumerating.
-- **TCO objective:** `Q * (RawUnitCost + NonCostAdjustment)` per pair, summed.
+- **Fixed costs via reified active variables:** a binary `B` per pair with
+  `B #= 1 #<==> Q #>= 1`; cost contribution `B * FixedAmount` added to TCO.
+- **Risk constraints on active counts:** per-part `sum(Bs, #>=, MinN)` and
+  `sum(Bs, #=<, MaxN)` enforce dual-sourcing and supplier-count limits.
+- **Global share via recursive weighted sums:** avoids `forall/2` (whose
+  negation-as-failure swallows CLP(FD) constraints) and posts the bound
+  directly on the supplier's Q variables.
+- **TCO objective:** `Q * (RawUnitCost + NonCostAdjustment) + B * FixedAmount`
+  per pair, summed.
 
 ## Project Layout
 

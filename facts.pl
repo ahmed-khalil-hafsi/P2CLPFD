@@ -1,5 +1,14 @@
 %%% PROCUREMENT ALLOCATION FACTS
 %%%
+%%% Declaring optional predicates as dynamic so the solver can check them
+%%% gracefully even when no facts are present.
+
+:- dynamic min_suppliers/2.
+:- dynamic max_suppliers/2.
+:- dynamic dual_source/1.
+:- dynamic max_global_share/2.
+:- dynamic fixed_cost/3.
+%%%
 %%% Schema (all quantities are absolute integers, not percentages):
 %%%
 %%%   demand(Part, Quantity).
@@ -33,6 +42,27 @@
 %%%       whose [MinQty, MaxQty] range contains the allocated quantity Q
 %%%       and applies that tier's UnitCost.
 %%%       If no price_tier/5 facts exist for a pair, falls back to cost/3.
+%%%
+%%%   fixed_cost(Supplier, Part, Amount).             % optional
+%%%       One-time charge (NRE / tooling / setup) incurred when Q > 0.
+%%%       Added to TCO as B * Amount where B is a 0/1 active variable.
+%%%       Absent => 0.
+%%%
+%%%   min_suppliers(Part, N).                         % optional
+%%%       Part must be sourced from at least N suppliers (active pairs).
+%%%       Absent => no lower bound on supplier count.
+%%%
+%%%   max_suppliers(Part, N).                         % optional
+%%%       Part may be sourced from at most N suppliers.
+%%%       Absent => no upper bound on supplier count.
+%%%
+%%%   dual_source(Part).                              % optional
+%%%       Shorthand for min_suppliers(Part, 2).
+%%%       If both min_suppliers and dual_source exist, the larger is used.
+%%%
+%%%   max_global_share(Supplier, Pct).                % optional
+%%%       Supplier's total across all parts may not exceed Pct% of total
+%%%       demand across all parts. Absent => unrestricted.
 
 % --- Parts and demand --------------------------------------------------------
 
@@ -95,3 +125,21 @@ global_capacity(supplier3, 5000).
 noncost_adjustment(supplier1, 0).
 noncost_adjustment(supplier2, 3).
 noncost_adjustment(supplier3, -5).
+
+% --- Fixed costs (NRE / tooling / setup) ------------------------------------
+%   One-time charge when Q > 0 for that pair.
+
+fixed_cost(supplier1, part1, 2000).   % $2000 tooling to use supplier1 for part1
+
+% --- Risk & sourcing rules --------------------------------------------------
+%   min_suppliers: must use at least N suppliers (dual-source or more)
+%   max_suppliers: cap on supply-base size for a part
+%   dual_source:   shorthand for min_suppliers(Part, 2)
+
+dual_source(part1).                   % part1 must have at least 2 suppliers
+max_suppliers(part2, 2).             % part2 at most 2 suppliers
+
+% --- Global share cap -------------------------------------------------------
+%   No supplier may exceed Pct% of total demand across all parts.
+
+max_global_share(supplier2, 40).     % supplier2 capped at 40% of total volume

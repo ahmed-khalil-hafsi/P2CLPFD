@@ -1,23 +1,87 @@
-# P2CLPFD: A Constraint Logic Programming Framework for Procurement
+# P2CLPFD — Procurement Allocation Optimizer
 
-P2CLPFD allocates demand for multiple parts across multiple suppliers while
-**minimizing the Total Cost of Ownership (TCO)**, subject to realistic
-procurement constraints: per-pair capacity, minimum order quantities (MOQ),
-sourcing-strategy share bounds, global supplier capacity, fixed costs
-(NRE/tooling/setup), risk (dual-sourcing, supplier-count limits), and
-global share caps. It also folds non-cost adjustments (quality, logistics,
-risk) into the objective.
+A constraint-based allocation engine for procurement professionals. It
+answers the question: **given N parts, M suppliers, and a set of business
+rules, what is the cost-optimal award?**
 
-It is built on SWI-Prolog's CLP(FD) library and solves the allocation as a
-finite-domain optimization problem with guaranteed optimality.
+The solver minimizes Total Cost of Ownership (TCO) while respecting every
+constraint you define — capacity, sourcing strategy, risk policy, and
+pricing structure. Every solution is verified against all constraints before
+it is returned.
 
-## Getting Started
+---
+
+## What you can model
+
+### Demand & supply
+
+- **Multi-part, multi-supplier allocation.** Split demand for any number of
+  parts across any number of suppliers in a single optimization run.
+- **Continuous quantities.** The solver awards any integer quantity — not
+  locked to fixed percentage steps. "Give supplier2 exactly 73 units" is a
+  valid output.
+- **Per-pair capacity.** Cap how much a specific supplier can provide of a
+  specific part (e.g. "supplier3 can only make 800 of part1").
+- **Global supplier capacity.** Cap a supplier's total volume across all
+  parts (e.g. "supplier2 cannot exceed 1000 units total").
+
+### Minimum order quantities
+
+- **MOQ per supplier-part pair.** "Supplier2 won't take less than 75 units
+  of part1." The solver either awards 0 or at least the MOQ — never an
+  embarrassing 10-unit order that triggers a surcharge.
+
+### Pricing
+
+- **Flat unit pricing.** A single price per supplier-part pair.
+- **Volume-based tiered pricing.** "Supplier1 charges $100 for 0–39 units,
+  $40 for 40+." The solver picks the optimal tier as part of the
+  optimization — no post-calculation or manual lookup.
+- **Non-cost adjustments.** Fold quality, logistics, or risk premiums into
+  the objective. "Supplier3 has a −5 quality credit, supplier2 a +3
+  logistics penalty." The award reflects total cost of ownership, not just
+  invoice price.
+- **Fixed costs (NRE / tooling / setup).** "Supplier1 needs a $2000 tooling
+  charge if we award them anything." The solver decides whether the unit
+  price advantage justifies the setup cost.
+
+### Sourcing strategy
+
+- **Per-part share bounds.** "Supplier2 must hold 30–70% of part1" or
+  "supplier1 may not exceed 30% of part1." Expressed as min/max percentages
+  of a part's demand.
+- **Dual-sourcing.** "Part1 must have at least 2 suppliers" — enforced as a
+  hard constraint, not a soft preference.
+- **Minimum / maximum supplier count.** "Part2 may use at most 2 suppliers"
+  or "part3 must come from at least 3 suppliers."
+- **Global share cap.** "No supplier may exceed 40% of total volume across
+  all parts." Prevents over-reliance on a single source.
+
+### Objective
+
+- **TCO minimization.** The solver returns the provably optimal award — not
+  a heuristic guess. First solution from `labeling([min(TCO)])` is the best.
+- **Cost ceiling.** "Find the best award under $15,000" — the solver
+  respects the budget or reports infeasibility.
+
+### Output & verification
+
+- **Pretty-printed allocation** with per-supplier quantities, unit costs
+  (raw + effective), fixed costs, and subtotals.
+- **Built-in verification.** Every solution is checked against all
+  constraints — demand, MOQ, capacity, share, global capacity, risk rules,
+  global share, and TCO recomputation — so you can hand the number to a
+  stakeholder with confidence.
+
+---
+
+## Quick start
 
 ### Prerequisites
 
-- [SWI-Prolog](http://www.swi-prolog.org/Download.html) (developed with v9.x)
+- [SWI-Prolog](http://www.swi-prolog.org/Download.html) (v9.x)
 
-### Running
+### Run
 
 ```bash
 swipl -q -g run -g halt main.pl
@@ -27,50 +91,40 @@ Or interactively:
 
 ```prolog
 ?- ['main.pl'].
-?- run.                       % solve, pretty-print, verify
+?- run.                       % solve + pretty-print + verify
+?- run(15000).                % solve with cost ceiling
 ?- solve(A, TCO).             % raw solve
-?- solve(A, TCO), print_allocation(A, TCO).
 ```
 
-## API
+### Define your data
 
-| Predicate | Description |
-|---|---|
-| `solve(-Allocation, -TCO)` | Optimal allocation minimizing TCO. |
-| `solve(-Allocation, -TCO, +MaxCost)` | As above, with `TCO =< MaxCost`. |
-| `print_allocation(+Allocation, +TCO)` | Pretty-print + verify all constraints. |
-| `run` / `run(+MaxCost)` | Convenience: solve + print. |
+Edit `facts.pl`. All quantities are absolute integers (not percentages).
 
-`Allocation` is a list of `alloc(Part, [q(Supplier, Qty), ...])`.
+| What | Format | Example |
+|---|---|---|
+| Demand | `demand(Part, Qty).` | `demand(valve_bracket, 500).` |
+| Unit cost | `cost(Supplier, Part, Price).` | `cost(acme, valve_bracket, 12).` |
+| Tiered pricing | `price_tier(Supplier, Part, Min, Max, Price).` | `price_tier(acme, valve_bracket, 0, 99, 15).` |
+| Per-pair capacity | `capacity(Supplier, Part, Max).` | `capacity(acme, valve_bracket, 300).` |
+| MOQ | `moq(Supplier, Part, Min).` | `moq(acme, valve_bracket, 100).` |
+| Share bounds | `share(Part, Supplier, MinPct, MaxPct).` | `share(valve_bracket, acme, 20, 60).` |
+| Global capacity | `global_capacity(Supplier, Max).` | `global_capacity(acme, 2000).` |
+| Non-cost adjustment | `noncost_adjustment(Supplier, Adj).` | `noncost_adjustment(acme, 3).` |
+| Fixed cost | `fixed_cost(Supplier, Part, Amount).` | `fixed_cost(acme, valve_bracket, 2000).` |
+| Min suppliers | `min_suppliers(Part, N).` | `min_suppliers(valve_bracket, 2).` |
+| Max suppliers | `max_suppliers(Part, N).` | `max_suppliers(valve_bracket, 3).` |
+| Dual-source | `dual_source(Part).` | `dual_source(valve_bracket).` |
+| Global share cap | `max_global_share(Supplier, Pct).` | `max_global_share(acme, 40).` |
 
-## Fact Schema
+Suppliers are discovered automatically from the cost/price facts — no need
+to declare them separately.
 
-All quantities are **absolute integers** (not percentages). A `(Supplier, Part)`
-pair with no `cost/3` fact is simply non-allocatable (forced to 0).
-
-| Fact | Meaning |
-|---|---|
-| `demand(Part, Qty)` | Total quantity of Part to source. |
-| `cost(Supplier, Part, UnitCost)` | Flat unit price. Required for allocatable pairs without tiers. |
-| `price_tier(Supplier, Part, MinQty, MaxQty, UnitCost)` | Volume-based tiered pricing. Use `sup` for unbounded `MaxQty`. Tiers must be non-overlapping and cover 0..sup. Overrides `cost/3` for that pair. |
-| `capacity(Supplier, Part, MaxQty)` | Per-pair maximum. Absent = unlimited. |
-| `moq(Supplier, Part, MinQty)` | Minimum order quantity. Absent = 0. |
-| `share(Part, Supplier, MinPct, MaxPct)` | Strategy bounds as % of demand (0–100). Absent = unrestricted. |
-| `global_capacity(Supplier, MaxQty)` | Total across all parts. Absent = unlimited. |
-| `noncost_adjustment(Supplier, Adj)` | Per-unit TCO adjustment (may be negative). Absent = 0. |
-| `fixed_cost(Supplier, Part, Amount)` | One-time charge (NRE/tooling) when Q > 0. Absent = 0. |
-| `min_suppliers(Part, N)` | Part must be sourced from at least N suppliers. Absent = no lower bound. |
-| `max_suppliers(Part, N)` | Part may use at most N suppliers. Absent = no upper bound. |
-| `dual_source(Part)` | Shorthand for `min_suppliers(Part, 2)`. |
-| `max_global_share(Supplier, Pct)` | Supplier may not exceed Pct% of total demand across all parts. Absent = unrestricted. |
-
-Suppliers are discovered automatically from `cost/3` facts — no need to declare them.
+---
 
 ## Example
 
-With the shipped `facts.pl` (250 units of part1, 220 of part2, three
-suppliers, tiered pricing on supplier1/part1, dual-source on part1,
-supplier2 capped at 40% of total volume), the optimal allocation is:
+Three suppliers, two parts, tiered pricing on one pair, dual-sourcing
+enforced on part1, and supplier2 capped at 40% of total volume:
 
 ```
 Part: part1
@@ -84,43 +138,18 @@ Part: part2
 *** Total Cost of Ownership: 19534 ***
 ```
 
-Note: the reported TCO includes non-cost adjustments (+3 for supplier2, −5 for
-supplier3). The global share cap (supplier2 at 40%) and dual-source requirement
-force a more balanced award, increasing TCO from ~13k (unconstrained) to ~19k.
+The global share cap and dual-source requirement force a more balanced
+award. Without these constraints, the solver would concentrate volume on the
+cheapest supplier — which is often not what you want in practice.
 
-## How It Works
+---
 
-The solver builds one finite-domain variable per `(Part, Supplier)` pair, posts
-all constraints declaratively, then calls `labeling([min(TCO)], Vars)` to find
-the cost-optimal solution. Backtracking yields further solutions in increasing
-TCO order.
-
-Key constraint techniques:
-
-- **MOQ as a gap domain:** `Q in 0 \/ Moq..sup` — either order nothing or at
-  least the MOQ. This avoids fragile disjunctions and keeps propagation strong.
-- **Share bounds as integer ratios:** `MinPct * Demand #=< 100 * Q` avoids
-  floating-point and keeps everything in exact integer arithmetic.
-- **Tiered pricing via `element/3` + reified bounds:** a `TierVar` selects the
-  active price tier; `element/3` maps it to the unit cost; reified `#==>`
-  constraints enforce `Q` within the selected tier's `[Min, Max]` range. This
-  lets the solver reason about which tier is optimal without enumerating.
-- **Fixed costs via reified active variables:** a binary `B` per pair with
-  `B #= 1 #<==> Q #>= 1`; cost contribution `B * FixedAmount` added to TCO.
-- **Risk constraints on active counts:** per-part `sum(Bs, #>=, MinN)` and
-  `sum(Bs, #=<, MaxN)` enforce dual-sourcing and supplier-count limits.
-- **Global share via recursive weighted sums:** avoids `forall/2` (whose
-  negation-as-failure swallows CLP(FD) constraints) and posts the bound
-  directly on the supplier's Q variables.
-- **TCO objective:** `Q * (RawUnitCost + NonCostAdjustment) + B * FixedAmount`
-  per pair, summed.
-
-## Project Layout
+## Project layout
 
 ```
-facts.pl          Data (demand, costs, capacities, strategy)
-solver.pl         The CLP(FD) engine + pretty-printer + verifier
-main.pl           Entry point: loads facts+solver, provides run/0,1
+facts.pl    Your data — demand, prices, capacities, strategy rules
+solver.pl   The optimization engine
+main.pl     Entry point
 ```
 
 ## License

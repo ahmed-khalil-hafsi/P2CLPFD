@@ -3,17 +3,19 @@
 %%% Loads facts and solver, provides convenience predicates.
 %%%
 %%% Usage:
-%%%   $ swipl -q -g run -g halt main.pl
+%%%   $ swipl -q -g run -g halt main.pl            % use facts.pl
+%%%   $ swipl -q -g "load_and_run('data.csv')" -g halt main.pl
 %%%
 %%% Or interactively:
 %%%   ?- ['main.pl'].
 %%%   ?- run.                       % solve + pretty-print + verify
+%%%   ?- run(15000).                % solve with cost ceiling
+%%%   ?- load_and_run('data.csv').  % load CSV then solve
 %%%   ?- solve(A, TCO).             % just solve
-%%%   ?- solve(A, TCO, 15000).      % solve with cost ceiling
-%%%   ?- solve(A, TCO), print_allocation(A, TCO).
 
 :- ['facts.pl'].
 :- ['solver.pl'].
+:- ['csv_loader.pl'].
 
 %! run is det.
 %  Solve the current facts, print the optimal allocation, and verify it.
@@ -32,10 +34,22 @@ run(MaxCost) :-
     ;   format('~nNo feasible allocation with TCO =< ~w.~n', [MaxCost])
     ).
 
+%! load_and_run(+Path) is det.
+%  Load facts from a CSV file, then solve and print.
+load_and_run(Path) :-
+    load_csv(Path),
+    run.
+
+%! load_and_run(+Path, +MaxCost) is det.
+%  Load facts from a CSV, then solve with cost ceiling.
+load_and_run(Path, MaxCost) :-
+    load_csv(Path),
+    run(MaxCost).
+
 %% --- Example queries -------------------------------------------------------
 %%
-%%  ?- run.
-%%  ?- run(15000).
+%%  ?- run.                                    % solve from facts.pl
+%%  ?- run(15000).                             % solve with cost ceiling
+%%  ?- load_and_run('sample.csv').             % load CSV then solve
+%%  ?- load_and_run('sample.csv', 15000).      % load CSV, solve with ceiling
 %%  ?- solve(A, TCO), print_allocation(A, TCO).
-%%  ?- findall(TCO-A, solve(A, TCO), All),   % enumerate solutions
-%%     keysort(All, Sorted), writeln(Sorted).

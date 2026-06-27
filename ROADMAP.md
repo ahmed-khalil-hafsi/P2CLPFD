@@ -60,13 +60,15 @@ Living document of what's done and what's next. Updated as features ship.
 
 ### Phase 2 — Realism & integrations
 
-**2a. CSV / spreadsheet loader** — HIGH
+**2a. CSV / spreadsheet loader** — DONE
 
-- `load_csv(+Path)` — reads a BOM + supplier quote sheet into facts
-- Expected columns: Part, Supplier, Demand, UnitCost (or tiered: MinQty, MaxQty, UnitCost), Capacity, MOQ, MinShare, MaxShare, GlobalCapacity, NonCostAdj, FixedCost
+- `load_csv(+Path)` — reads a flat CSV into facts
+- Single CSV with all columns: part, supplier, demand, unit_cost, capacity, moq, share_min, share_max, noncost_adj, fixed_cost, min_suppliers, max_suppliers, dual_source, global_capacity, global_share_cap
+- `load_and_run(+Path)` convenience predicate in main.pl
+- Per-part and per-supplier attributes deduplicated across rows
 - Effect: a category manager (or AI agent) drops a spreadsheet; no Prolog editing
 
-**2b. Lead time / OTIF / quality as hard constraints** — MEDIUM
+**2b. Lead time / OTIF / quality as hard constraints** — NEXT
 
 - New facts: `leadtime(Supplier, Part, Days)`, `otif(Supplier, Pct)`, `quality(Supplier, Score)`
 - New constraints: `otif(Supplier, Pct), Pct >= Threshold` (disqualify), or `leadtime #=< MaxDays`

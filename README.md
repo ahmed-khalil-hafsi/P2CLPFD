@@ -84,7 +84,8 @@ it is returned.
 ### Run
 
 ```bash
-swipl -q -g run -g halt main.pl
+swipl -q -g run -g halt main.pl               % use built-in facts.pl
+swipl -q -g "load_and_run('data.csv')" -g halt main.pl  % load from CSV
 ```
 
 Or interactively:
@@ -93,12 +94,56 @@ Or interactively:
 ?- ['main.pl'].
 ?- run.                       % solve + pretty-print + verify
 ?- run(15000).                % solve with cost ceiling
+?- load_and_run('data.csv').  % load CSV then solve
 ?- solve(A, TCO).             % raw solve
 ```
 
 ### Define your data
 
-Edit `facts.pl`. All quantities are absolute integers (not percentages).
+Two ways to provide data:
+
+**Option A: Edit `facts.pl`** (for Prolog users)
+
+**Option B: Prepare a CSV file** (for everyone else)
+
+A single flat CSV with one row per supplier-part pair. All quantities are
+absolute integers. Empty cells use the default (no constraint).
+
+| Column | Required | Description | Default |
+|---|---|---|---|
+| `part` | yes | Part name | — |
+| `supplier` | yes | Supplier name | — |
+| `demand` | yes | Total demand for this part | — |
+| `unit_cost` | yes | Unit price | — |
+| `capacity` | no | Max this supplier can provide of this part | unlimited |
+| `moq` | no | Minimum order quantity | 0 |
+| `share_min` | no | Min % of part demand this supplier must win | 0 |
+| `share_max` | no | Max % of part demand this supplier may win | 100 |
+| `noncost_adj` | no | Per-unit TCO adjustment (quality, logistics, risk) | 0 |
+| `fixed_cost` | no | One-time charge (NRE/tooling) when awarded | 0 |
+| `min_suppliers` | no | Part must have at least N suppliers | — |
+| `max_suppliers` | no | Part may use at most N suppliers | — |
+| `dual_source` | no | Shorthand for min_suppliers = 2 | — |
+| `global_capacity` | no | Supplier's total across all parts | unlimited |
+| `global_share_cap` | no | Supplier may not exceed this % of total volume | — |
+
+**Example CSV:**
+
+```csv
+part,supplier,demand,unit_cost,capacity,moq,share_min,share_max,noncost_adj,fixed_cost,min_suppliers,max_suppliers,dual_source,global_capacity,global_share_cap
+part1,supplier1,250,100,1000,,0,30,0,2000,2,,1,5000,
+part1,supplier2,250,10,150,75,30,70,3,,,,,1000,
+part1,supplier3,250,50,800,,0,100,-5,,,,,5000,
+```
+
+**Notes:**
+- Each row must have exactly 15 fields (including empty ones).
+- Per-part attributes (`min_suppliers`, `max_suppliers`, `dual_source`) may
+  appear in any row of that part — the last non-empty value wins.
+- Per-supplier attributes (`global_capacity`, `global_share_cap`) may appear
+  in any row of that supplier.
+- Tiered pricing (`price_tier`) is not yet supported via CSV — use `facts.pl`
+  for that.
 
 | What | Format | Example |
 |---|---|---|
@@ -147,9 +192,11 @@ cheapest supplier — which is often not what you want in practice.
 ## Project layout
 
 ```
-facts.pl    Your data — demand, prices, capacities, strategy rules
-solver.pl   The optimization engine
-main.pl     Entry point
+facts.pl       Your data — demand, prices, capacities, strategy rules
+sample.csv     Example CSV (same data as facts.pl)
+csv_loader.pl  CSV parser and fact loader
+solver.pl      The optimization engine
+main.pl        Entry point
 ```
 
 ## License

@@ -82,6 +82,19 @@ it is returned.
   global share, and TCO recomputation — so you can hand the number to a
   stakeholder with confidence.
 
+### Scenario comparison
+
+- **What-if analysis.** Run scenarios with temporary overrides (price
+  changes, constraint removals) without mutating base facts. Original facts
+  are restored automatically after each solve.
+- **Override types:**
+  - `set(Fact)` — replace a fact (e.g. change a price)
+  - `remove(Template)` — remove a constraint (e.g. drop dual-source rule)
+  - `cost_delta(Supplier, Part, Pct)` — adjust price by percentage
+  - `demand_delta(Part, Pct)` — adjust demand by percentage
+- **Batch comparison.** Compare multiple scenarios side-by-side with TCO
+  deltas vs baseline.
+
 ```
                          CONSTRAINT FLOW
     ┌─────────────────────────────────────────────────────────────┐
@@ -138,6 +151,30 @@ Or interactively:
 ?- run(15000).                % solve with cost ceiling
 ?- load_and_run('data.csv').  % load CSV then solve
 ?- solve(A, TCO).             % raw solve
+
+% Scenario comparison
+?- compare_scenarios([
+|    baseline-[],
+|    price_up-[cost_delta(supplier2, part1, 10)],
+|    no_risk-[remove(dual_source(part1)), remove(max_global_share(supplier2, _))]
+|  ], Results), print_comparison(Results).
+```
+
+Output:
+
+```
+=== Scenario Comparison ===
+
+Scenario              TCO          Status
+---------------------------------------------
+baseline              19534        ok
+price_up              19609        ok
+no_risk               13710        ok
+---------------------------------------------
+
+Delta vs baseline:
+  price_up: +75 (+0%)
+  no_risk: -5824 (-30%)
 ```
 
 ### Define your data
@@ -269,6 +306,7 @@ facts.pl       Your data — demand, prices, capacities, strategy rules
 sample.csv     Example CSV (same data as facts.pl)
 csv_loader.pl  CSV parser and fact loader
 solver.pl      The optimization engine
+scenarios.pl   Scenario comparison (what-if analysis)
 main.pl        Entry point
 ```
 

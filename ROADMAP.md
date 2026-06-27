@@ -51,11 +51,12 @@ Living document of what's done and what's next. Updated as features ship.
 - Effect: captures real sourcing-policy rules ("no single-source risk", "diversify top 3 suppliers")
 - Note: `forall/2` must NOT be used for CLP(FD) constraint posting — its negation-as-failure swallows constraints. Use direct recursion instead.
 
-**1c. Scenario comparison** — NEXT
+**1c. Scenario comparison** — DONE
 
-- `solve_scenario(+Name, -Allocation, -TCO)` — solve against a named override set (price deltas, capacity changes, relaxed MOQs) without mutating base facts
-- `compare_scenarios(+Names, -Table)` — produce a side-by-side TCO + allocation diff
-- Implementation: overlay facts via `assertz` into a module-scoped store, solve, retract
+- `solve_scenario(+Overrides, -Allocation, -TCO)` — applies overrides temporarily via `setup_call_cleanup/3`, solves, restores
+- `compare_scenarios(+Scenarios, -Results)` — batch comparison with delta output
+- `print_comparison(+Results)` — formatted table with TCO, status, and delta vs baseline
+- Overrides: `set(Fact)`, `remove(Template)`, `cost_delta(Supplier, Part, Pct)`, `demand_delta(Part, Pct)`
 - Effect: category manager asks "what if supplier2 +10%?" and gets a clean diff
 
 ### Phase 2 — Realism & integrations

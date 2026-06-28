@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p2clpfd"
+version = "0.1.0"
+description = "Procurement allocation optimizer — minimize TCO across suppliers with constraint-based optimization"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.9"
+authors = [{name = "Ahmed Khalil Hafsi"}]
+keywords = ["procurement", "sourcing", "allocation", "optimization", "clpfd", "constraint-logic-programming", "supply-chain", "tco"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Prolog",
+    "Topic :: Office/Business",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "janus-swi>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ahmed-khalil-hafsi/P2CLPFD"
+Repository = "https://github.com/ahmed-khalil-hafsi/P2CLPFD"
+
+[tool.setuptools]
+packages = ["p2clpfd"]
+
+[tool.setuptools.package-data]
+p2clpfd = ["pl/*.pl"]

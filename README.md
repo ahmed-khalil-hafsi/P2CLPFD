@@ -269,6 +269,76 @@ cheapest supplier — which is often not what you want in practice.
 
 ---
 
+## JSON API (for agents and integrations)
+
+Start the HTTP server:
+
+```bash
+swipl -g "['main.pl','json_api.pl'], server(8080), thread_get_message(_)" &
+```
+
+### Endpoints
+
+**POST /solve** — optimal allocation
+
+```bash
+curl -s -X POST localhost:8080/solve \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path":"sample.csv","max_cost":20000}'
+```
+
+```json
+{
+  "tco": 19534,
+  "status": "ok",
+  "allocations": [
+    {"part":"part1","suppliers":[
+      {"supplier":"supplier2","qty":75,"unit_cost":13,"subtotal":975},
+      {"supplier":"supplier3","qty":175,"unit_cost":45,"subtotal":7875}
+    ]}
+  ]
+}
+```
+
+**POST /scenarios** — what-if comparison
+
+```bash
+curl -s -X POST localhost:8080/scenarios \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path":"sample.csv","scenarios":[
+    {"name":"baseline","overrides":[]},
+    {"name":"no_cap","overrides":[{"remove":"max_global_share(supplier2,_)"}]}
+  ]}'
+```
+
+```json
+{
+  "results": [
+    {"name":"baseline","status":"ok","tco":19534},
+    {"name":"no_cap","status":"ok","tco":13742}
+  ],
+  "deltas": [
+    {"name":"no_cap","delta":-5792,"pct":-30}
+  ]
+}
+```
+
+**POST /validate** — validate facts
+
+```bash
+curl -s -X POST localhost:8080/validate \
+  -H "Content-Type: application/json" \
+  -d '{"csv_path":"sample.csv"}'
+```
+
+**GET /health** — health check
+
+```bash
+curl -s localhost:8080/health
+```
+
+---
+
 ## How it works
 
 ```
@@ -284,6 +354,8 @@ sample.csv     Example CSV (same data as facts.pl)
 csv_loader.pl  CSV parser and fact loader
 solver.pl      The optimization engine
 scenarios.pl   Scenario comparison (what-if analysis)
+json_api.pl    JSON HTTP API for agent integration
+tests.pl       Test suite (20 tests)
 main.pl        Entry point
 ```
 

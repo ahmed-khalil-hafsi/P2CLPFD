@@ -103,12 +103,12 @@ Living document of what's done and what's next. Updated as features ship.
 
 ---
 
-## Technical debt (to clean up along the way)
+## Technical debt
 
-- Delete `volume_based_pricing.pl` (superseded by `price_tier/5`)
-- Delete `CLPFD-general.pl` (superseded by `solver.pl`)
-- Add `tests.pl` regression suite: known-feasible, infeasible, unbounded, tier-boundary, MOQ-gap, share-binding cases
+~~- Delete `volume_based_pricing.pl` (superseded by `price_tier/5`)~~ DONE
+~~- Delete `CLPFD-general.pl` (superseded by `solver.pl`)~~ DONE
+~~- Add `tests.pl` regression suite~~ DONE (20/20 tests pass)
+~~- Guard against incomplete tier coverage (validation predicate: `validate_tiers/0`)~~ DONE
+~~- Guard against MOQ > capacity~~ DONE (in `validate_facts/0`)
 - Add `load.pl` single entry point
-- Guard against incomplete tier coverage (validation predicate: `validate_tiers/0`)
-- Guard against MOQ > capacity (immediate infeasibility detection)
 - NEVER use `forall/2` to post CLP(FD) constraints — use direct recursion or `maplist` instead

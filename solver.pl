@@ -549,9 +549,130 @@ supplier_qs_across_parts_alloc(Supplier, [alloc(_, Qs)|Rest], Out) :-
     supplier_qs_across_parts_alloc(Supplier, Rest, RestOut).
 
 %% ------------------------------------------------------------------ %%
+%%  VALIDATION GUARDS                                                  %%
+%% ------------------------------------------------------------------ %%
+
+%! validate_facts is det.
+%
+%  Runs all validation checks and reports issues.
+%  Returns true even if issues are found (use the output to diagnose).
+%
+validate_facts :-
+    format('~n=== Fact Validation ===~n'),
+    validate_tiers,
+    validate_moq_capacity,
+    validate_demand_exists,
+    validate_cost_exists,
+    validate_share_ranges,
+    format('=== Validation Complete ===~n~n').
+
+%! validate_tiers is det.
+%  Checks that price_tier/5 facts for each pair are non-overlapping
+%  and collectively cover 0..sup.
+validate_tiers :-
+    findall(S-P, price_tier(S, P, _, _, _), SPairs0),
+    sort(SPairs0, SPairs),
+    forall(member(S-P, SPairs),
+           (   findall(tier(Min, Max), price_tier(S, P, Min, Max, _), Tiers),
+               check_tier_coverage(S, P, Tiers)
+           )).
+
+check_tier_coverage(S, P, Tiers) :-
+    (   Tiers = []
+    ->  true
+    ;   sort_tiers(Tiers, Sorted),
+        check_tier_gaps(S, P, Sorted, 0)
+    ).
+
+sort_tiers(Tiers, Sorted) :-
+    sort(0, @=<, Tiers, Sorted).
+
+check_tier_gaps(_, _, [], _) :- !.
+check_tier_gaps(S, P, [tier(Min, Max)|Rest], ExpectedMin) :-
+    (   Min =\= ExpectedMin
+    ->  format('  !! TIER GAP: ~w/~w tier starts at ~w, expected ~w~n',
+               [S, P, Min, ExpectedMin])
+    ;   true
+    ),
+    (   Max == sup
+    ->  true
+    ;   (   nonvar(Max), Max < Min
+        ->  format('  !! TIER INVALID: ~w/~w tier [~w, ~w] max < min~n',
+                   [S, P, Min, Max])
+        ;   true
+        )
+    ),
+    (   Max == sup
+    ->  true
+    ;   NextMin is Max + 1,
+        check_tier_gaps(S, P, Rest, NextMin)
+    ).
+
+%! validate_moq_capacity is det.
+%  Checks that MOQ <= capacity for all pairs where both are defined.
+validate_moq_capacity :-
+    forall(moq(Supplier, Part, Moq),
+           (   capacity(Supplier, Part, Cap)
+           ->  (   Moq > Cap
+               ->  format('  !! MOQ > CAPACITY: ~w/~w MOQ=~w > Cap=~w~n',
+                          [Supplier, Part, Moq, Cap])
+               ;   true
+               )
+           ;   true
+           )).
+
+%! validate_demand_exists is det.
+%  Checks that every part referenced in cost/3 or price_tier/5 has a demand/2.
+validate_demand_exists :-
+    findall(P, (cost(_, P, _) ; price_tier(_, P, _, _, _)), Parts0),
+    sort(Parts0, Parts),
+    forall(member(Part, Parts),
+           (   demand(Part, _)
+           ->  true
+           ;   format('  !! MISSING DEMAND: part ~w has costs but no demand/2~n',
+                      [Part])
+           )).
+
+%! validate_cost_exists is det.
+%  Checks that every (Supplier, Part) pair with capacity/moq/share also
+%  has a cost/3 or price_tier/5.
+validate_cost_exists :-
+    forall((capacity(S, P, _) ; moq(S, P, _) ; share(P, S, _, _)),
+           (   (   cost(S, P, _)
+               ;   price_tier(S, P, _, _, _)
+               )
+           ->  true
+           ;   format('  !! MISSING COST: ~w/~w has capacity/moq/share but no cost/3~n',
+                      [S, P])
+           )).
+
+%! validate_share_ranges is det.
+%  Checks that share min =< max and both are in 0..100.
+validate_share_ranges :-
+    forall(share(Part, Supplier, MinPct, MaxPct),
+           (   (   MinPct < 0 ; MinPct > 100
+               ->  format('  !! SHARE INVALID: ~w/~w min=~w out of [0,100]~n',
+                          [Part, Supplier, MinPct])
+               ;   true
+               ),
+               (   MaxPct < 0 ; MaxPct > 100
+               ->  format('  !! SHARE INVALID: ~w/~w max=~w out of [0,100]~n',
+                          [Part, Supplier, MaxPct])
+               ;   true
+               ),
+               (   MinPct > MaxPct
+               ->  format('  !! SHARE INVALID: ~w/~w min=~w > max=~w~n',
+                          [Part, Supplier, MinPct, MaxPct])
+               ;   true
+               )
+           )).
+
+%% ------------------------------------------------------------------ %%
 %%  EXAMPLE QUERIES                                                    %%
 %% ------------------------------------------------------------------ %%
 
 %% ?- solve(A, TCO), print_allocation(A, TCO).
 %%
 %% ?- solve(A, TCO, 20000), print_allocation(A, TCO).
+%%
+%% ?- validate_facts.

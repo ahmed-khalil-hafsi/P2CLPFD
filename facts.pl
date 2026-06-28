@@ -8,6 +8,7 @@
 :- dynamic dual_source/1.
 :- dynamic max_global_share/2.
 :- dynamic fixed_cost/3.
+:- dynamic rebate/3.
 %%%
 %%% Schema (all quantities are absolute integers, not percentages):
 %%%
@@ -143,3 +144,9 @@ max_suppliers(part2, 2).             % part2 at most 2 suppliers
 %   No supplier may exceed Pct% of total demand across all parts.
 
 max_global_share(supplier2, 40).     % supplier2 capped at 40% of total volume
+
+% --- Rebates (portfolio-level volume discounts) --------------------------------
+%   If total volume across all parts exceeds Threshold, get DiscountPct% off
+%   the ENTIRE supplier spend (retrospective, cross-part).
+
+rebate(supplier2, 150, 5).          % supplier2: 5% off if total volume >= 150

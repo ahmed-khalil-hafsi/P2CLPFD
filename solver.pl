@@ -118,8 +118,11 @@ build_model(Parts, Suppliers, RawAlloc, Vars, TCO) :-
     build_global_capacity(Suppliers, RawAlloc),
     post_risk_constraints(Parts, AllBs),
     post_global_share(RawAlloc, Parts),
-    sum(PartCosts, #=, TCO),
-    append(VarsParts, Vars).
+    (   build_rebates(Suppliers, RawAlloc, PartCosts, TCO)
+    ->  append(VarsParts, Vars)
+    ;   sum(PartCosts, #=, TCO),
+        append(VarsParts, Vars)
+    ).
 
 build_parts([], _, [], [], [], []).
 build_parts([Part|Rest], Suppliers,
@@ -139,7 +142,7 @@ build_part_suppliers(Part, Suppliers, Qs, PartCost, Vars, Bs) :-
 
 build_part_suppliers_(_, [], _, [], [], [], []).
 build_part_suppliers_(Part, [Supplier|Rest], Demand,
-                     [q(Supplier,Q)|Qs], [CostC|Cs], [Q,B|Vs], [B|Bs]) :-
+                     [q(Supplier,Q,CostC)|Qs], [CostC|Cs], [Q,B|Vs], [B|Bs]) :-
     (   allocatable(Part, Supplier)
     ->  Q in 0..Demand,
         B in 0..1,
@@ -159,9 +162,9 @@ build_part_suppliers_(Part, [Supplier|Rest], Demand,
     build_part_suppliers_(Part, Rest, Demand, Qs, Cs, RestVs, Bs).
 
 %% Extract the quantity variables by unification (NOT findall, which copies
-%% and would detach constraints from the original q/2 terms).
+%% and would detach constraints from the original q/3 terms).
 qs_of([], []).
-qs_of([q(_,Q)|Rest], [Q|Out]) :- qs_of(Rest, Out).
+qs_of([q(_,Q,_)|Rest], [Q|Out]) :- qs_of(Rest, Out).
 
 %! supplier_part_constraints(+Part, +Supplier, +Demand, +Q, -CostC, -AuxVars).
 %
@@ -267,7 +270,7 @@ supplier_qs_across_parts(Supplier, [alloc(_, Qs)|Rest], Out) :-
     supplier_qs_across_parts(Supplier, Rest, RestOut).
 
 supplier_q_in_part(_, [], []).
-supplier_q_in_part(Supplier, [q(Supplier,Q)|Rest], [Q|Out]) :-
+supplier_q_in_part(Supplier, [q(Supplier,Q,_)|Rest], [Q|Out]) :-
     !, supplier_q_in_part(Supplier, Rest, Out).
 supplier_q_in_part(Supplier, [_|Rest], Out) :-
     supplier_q_in_part(Supplier, Rest, Out).
@@ -345,6 +348,63 @@ post_weighted_sum([V|Vs], Coeff, Total) :-
     post_weighted_sum(Vs, Coeff, Rest).
 
 %% ------------------------------------------------------------------ %%
+%%  REBATES (portfolio-level volume discounts)                         %%
+%% ------------------------------------------------------------------ %%
+
+%! build_rebates(+Suppliers, +RawAlloc, +AllPartCosts, -RebateTCON).
+%  Computes the collection of (supplier rebated cost) terms to replace
+%  the per-part cost aggregation when rebates are active.
+build_rebates(_, _, _, _) :-
+    \+ rebate(_, _, _),
+    !, fail.   % no rebates → signal failure so build_model uses sum(PartCosts)
+
+build_rebates(Suppliers, RawAlloc, PartCosts, TCO) :-
+    rebate(_, _, _),  % at least one rebate exists
+    !,
+    supplier_costs_across_all(Suppliers, RawAlloc, SupplierCosts, _),
+    sum(SupplierCosts, #=, TCO).
+
+%! supplier_costs_across_all(+Suppliers, +RawAlloc, -Costs, -RebateVars).
+%  For each supplier, compute the cost (with rebate applied if applicable).
+supplier_costs_across_all([], _, [], []).
+supplier_costs_across_all([S|Ss], RawAlloc, [Cost|Costs], Vars) :-
+    supplier_final_cost(S, RawAlloc, Cost, VarsHead),
+    supplier_costs_across_all(Ss, RawAlloc, Costs, VarsTail),
+    append(VarsHead, VarsTail, Vars).
+
+%! supplier_final_cost(+Supplier, +RawAlloc, -Cost, -RebateVars).
+%  Compute the supplier's total cost, with rebate applied if applicable.
+supplier_final_cost(Supplier, RawAlloc, FinalCost, RebateVars) :-
+    supplier_costs_across_parts(Supplier, RawAlloc, CostCs),
+    sum(CostCs, #=, TotalCost),
+    (   rebate(Supplier, Threshold, Pct)
+    ->  supplier_qs_across_parts(Supplier, RawAlloc, Qs),
+        sum(Qs, #=, TotalQ),
+        RebateActive in 0..1,
+        TotalQ #>= Threshold #<==> RebateActive #= 1,
+        CostDiscounted #= (TotalCost * (100 - Pct)) div 100,
+        RebateIdx #= RebateActive + 1,
+        element(RebateIdx, [TotalCost, CostDiscounted], FinalCost),
+        RebateVars = [RebateActive, RebateIdx]
+    ;   FinalCost = TotalCost,
+        RebateVars = []
+    ).
+
+%! supplier_costs_across_parts(+Supplier, +RawAlloc, -CostCs).
+%  Collects CostC variables for Supplier across all parts.
+supplier_costs_across_parts(_, [], []).
+supplier_costs_across_parts(Supplier, [alloc(_, Qs)|Rest], Out) :-
+    supplier_cost_in_part(Supplier, Qs, CostInPart),
+    append(CostInPart, RestOut, Out),
+    supplier_costs_across_parts(Supplier, Rest, RestOut).
+
+supplier_cost_in_part(_, [], []).
+supplier_cost_in_part(Supplier, [q(Supplier,_,C)|Rest], [C|Out]) :-
+    !, supplier_cost_in_part(Supplier, Rest, Out).
+supplier_cost_in_part(Supplier, [_|Rest], Out) :-
+    supplier_cost_in_part(Supplier, Rest, Out).
+
+%% ------------------------------------------------------------------ %%
 %%  MATERIALIZE  (turn raw structure into ground output)               %%
 %% ------------------------------------------------------------------ %%
 
@@ -354,7 +414,7 @@ materialize([alloc(Part, RawQs)|Rest], [alloc(Part, Qs)|Out]) :-
     materialize(Rest, Out).
 
 materialize_qs([], []).
-materialize_qs([q(S,Q)|Rest], [q(S,Q)|Out]) :-
+materialize_qs([q(S,Q,_C)|Rest], [q(S,Q)|Out]) :-
     materialize_qs(Rest, Out).
 
 %% ------------------------------------------------------------------ %%
@@ -471,12 +531,44 @@ verify_tco(Allocation, TCO) :-
               verify_pair_cost(Part, Supplier, Q, CostC)
             ),
             CostCs),
-    sum_list(CostCs, Computed),
+    sum_list(CostCs, BaseComputed),
+    % Apply rebates: for each supplier with a rebate, compute discount
+    findall(Supplier, rebate(Supplier, _, _), RebateSuppliers),
+    sort(RebateSuppliers, RebateSuppliers),
+    verify_rebate_savings(RebateSuppliers, Allocation, CostCs, RebateSavingsTotal),
+    Computed is BaseComputed - RebateSavingsTotal,
     (   Computed =:= TCO
     ->  true
     ;   format('  !! TCO MISMATCH: computed=~w reported=~w~n',
                [Computed, TCO])
     ).
+
+verify_rebate_savings([], _, _, 0).
+verify_rebate_savings([S|Rest], Allocation, AllCostCs, Total) :-
+    rebate(S, Threshold, Pct),
+    supplier_total_q(S, Allocation, TotalQ),
+    (   TotalQ >= Threshold
+    ->  supplier_total_cost(S, Allocation, AllCostCs, SuppCost),
+        % Use the same formula as the solver: SuppCost * (100 - Pct) // 100
+        DiscountedCost is SuppCost * (100 - Pct) // 100,
+        Saving is SuppCost - DiscountedCost
+    ;   Saving = 0
+    ),
+    verify_rebate_savings(Rest, Allocation, AllCostCs, RestTotal),
+    Total is Saving + RestTotal.
+
+supplier_total_q(Supplier, Allocation, TotalQ) :-
+    findall(Q, (member(alloc(_, Qs), Allocation), member(q(Supplier, Q), Qs)), Qs),
+    sum_list(Qs, TotalQ).
+
+supplier_total_cost(Supplier, Allocation, _AllCostCs, TotalCost) :-
+    findall(CostC,
+            ( member(alloc(Part, Qs), Allocation),
+              member(q(Supplier, Q), Qs),
+              verify_pair_cost(Part, Supplier, Q, CostC)
+            ),
+            SupplierCostCs),
+    sum_list(SupplierCostCs, TotalCost).
 
 %! verify_pair_cost(+Part, +Supplier, +Q, -CostC) is det.
 %  Deterministic cost recomputation for a single pair (ground Q).

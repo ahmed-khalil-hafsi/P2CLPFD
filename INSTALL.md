@@ -87,3 +87,46 @@ curl -s -X POST localhost:8080/solve \
 ```
 
 See [TECHNICAL.md](TECHNICAL.md) for full API reference.
+
+## Option D: MCP server (for AI agents)
+
+P2CLPFD ships as an MCP (Model Context Protocol) server that any MCP-compatible
+agent can use — Claude Desktop, Cursor, Continue, or your own agent.
+
+### Start the server
+
+```bash
+p2clpfd-mcp
+# or: python -m p2clpfd.mcp
+```
+
+The server communicates over stdin/stdout (JSON-RPC). You don't run it
+interactively — your agent client spawns it as a subprocess.
+
+### Configure Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "p2clpfd": {
+      "command": "p2clpfd-mcp"
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The agent can now call `solve_allocation`,
+`compare_scenarios`, and `validate_data` as tools.
+
+### Available tools
+
+| Tool | Description |
+|---|---|
+| `solve_allocation` | Find the cost-optimal supplier allocation |
+| `compare_scenarios` | Compare multiple what-if scenarios |
+| `validate_data` | Validate CSV for common issues |
+
+The agent receives structured JSON with TCO, per-part supplier quantities,
+unit costs, subtotals, and fixed costs.

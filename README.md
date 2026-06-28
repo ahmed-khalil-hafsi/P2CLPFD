@@ -192,6 +192,25 @@ for alloc in result["allocations"]:
 swipl -q -g run -g halt main.pl
 ```
 
+### MCP server (Claude Desktop, Cursor, agents)
+
+```bash
+p2clpfd-mcp
+```
+
+Add to Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "p2clpfd": { "command": "p2clpfd-mcp" }
+  }
+}
+```
+
+The agent can then call `solve_allocation`, `compare_scenarios`, and
+`validate_data` as native tools — no swipl or CLI knowledge needed.
+
 ### HTTP API (for agents and integrations)
 
 ```bash

@@ -25,6 +25,9 @@ dependencies = [
     "janus-swi>=1.5.0",
 ]
 
+[project.scripts]
+p2clpfd-mcp = "p2clpfd.mcp:serve"
+
 [project.urls]
 Homepage = "https://github.com/ahmed-khalil-hafsi/P2CLPFD"
 Repository = "https://github.com/ahmed-khalil-hafsi/P2CLPFD"

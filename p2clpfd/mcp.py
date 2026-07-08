@@ -95,6 +95,27 @@ TOOLS = [
             "required": ["csv_path"],
         },
     },
+    {
+        "name": "solve_trace",
+        "description": "Solve and return a real-time trace of the solver's internal "
+        "search process. Returns NDJSON lines showing domain narrowing at each "
+        "constraint phase, the search process, and the final optimal allocation. "
+        "Use this to see HOW the solver finds the answer, not just WHAT the answer is.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "csv_path": {
+                    "type": "string",
+                    "description": "Absolute path to the CSV file with procurement data."
+                },
+                "max_cost": {
+                    "type": "integer",
+                    "description": "Optional cost ceiling."
+                },
+            },
+            "required": ["csv_path"],
+        },
+    },
 ]
 
 # ── JSON-RPC handler ──────────────────────────────────────────────────────
@@ -164,6 +185,19 @@ def _handle_tools_call(params: dict) -> dict:
             "content": [{
                 "type": "text",
                 "text": json.dumps(result, indent=2),
+            }]
+        }
+
+    elif name == "solve_trace":
+        csv_path = args.get("csv_path", "")
+        max_cost = args.get("max_cost")
+        solver = _get_solver()
+        solver.load_csv(csv_path)
+        result = solver.solve_trace(max_cost=max_cost)
+        return {
+            "content": [{
+                "type": "text",
+                "text": result["trace"],
             }]
         }
 

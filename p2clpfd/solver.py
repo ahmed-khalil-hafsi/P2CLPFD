@@ -22,7 +22,7 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    for name in ["facts", "solver", "csv_loader", "scenarios", "json_api"]:
+    for name in ["facts", "solver", "csv_loader", "scenarios", "json_api", "tracer"]:
         janus.consult(str(_PL_DIR / f"{name}.pl"))
     _LOADED = True
 
@@ -184,3 +184,23 @@ class Solver:
             'with_output_to(string(_), validate_facts)'
         )
         return {"status": "ok"}
+
+    def solve_trace(self, max_cost: Optional[int] = None) -> dict:
+        """
+        Solve and return the full solver trace as NDJSON lines.
+
+        The trace shows domain narrowing and the final optimal allocation.
+        Returns a dict with "trace" (string) and "tco" (int or None).
+        """
+        if max_cost is not None:
+            result = janus.query_once(
+                'solve_with_trace_captured(MaxCost, Trace, TCO)',
+                {'MaxCost': max_cost}
+            )
+        else:
+            result = janus.query_once(
+                'solve_with_trace_captured(Trace, TCO)'
+            )
+        tco = result.get("TCO")
+        trace = result.get("Trace", "")
+        return {"trace": trace, "tco": tco}

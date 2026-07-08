@@ -358,7 +358,7 @@ build_rebates(_, _, _, _) :-
     \+ rebate(_, _, _),
     !, fail.   % no rebates → signal failure so build_model uses sum(PartCosts)
 
-build_rebates(Suppliers, RawAlloc, PartCosts, TCO) :-
+build_rebates(Suppliers, RawAlloc, _PartCosts, TCO) :-
     rebate(_, _, _),  % at least one rebate exists
     !,
     supplier_costs_across_all(Suppliers, RawAlloc, SupplierCosts, _),

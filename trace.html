@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P2CLPFD — Solver Trace</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 24px;
+    min-height: 100vh;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; }
+
+  header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 32px; padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header h1 {
+    font-size: 20px; font-weight: 600;
+    background: linear-gradient(135deg, var(--blue), var(--purple));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+
+  .status-badge {
+    padding: 4px 12px; border-radius: 12px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .status-badge.connected { color: var(--green); border-color: var(--green); }
+  .status-badge.searching { color: var(--orange); border-color: var(--orange); animation: pulse 1s infinite; }
+  .status-badge.optimal  { color: var(--green); border-color: var(--green); }
+  .status-badge.error    { color: var(--red); border-color: var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .meta {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    margin-bottom: 24px; font-size: 13px; color: var(--text-muted);
+  }
+  .meta span strong { color: var(--text); }
+
+  .grid { display: grid; gap: 24px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card-title {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 16px;
+  }
+
+  .var-row { margin-bottom: 16px; }
+  .var-row:last-child { margin-bottom: 0; }
+  .var-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; margin-bottom: 4px;
+  }
+  .var-name { font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; color: var(--text); }
+  .var-domain { color: var(--text-muted); }
+
+  .bar-track {
+    position: relative; height: 8px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 4px; overflow: hidden;
+  }
+  .bar-fill {
+    position: absolute; top: 0; left: 0; height: 100%;
+    background: var(--blue); border-radius: 4px;
+    transition: width 0.4s ease, left 0.4s ease;
+  }
+  .bar-fill.narrow { background: var(--green); }
+  .bar-fill.solved { background: var(--purple); }
+
+  .sol-list {
+    display: flex; flex-direction: column; gap: 6px;
+    max-height: 200px; overflow-y: auto;
+  }
+  .sol-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    font-size: 13px;
+  }
+  .sol-item .tco { font-family: 'SF Mono', monospace; font-weight: 600; }
+  .sol-item .type { font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+  .sol-item .type.first { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .sol-item .type.improved { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .sol-item .type.optimal { background: rgba(63,185,80,0.15); color: var(--green); }
+
+  .tco-display {
+    font-size: 36px; font-weight: 700; text-align: center;
+    padding: 16px; font-family: 'SF Mono', monospace;
+  }
+  .tco-display .label { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+       font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+  td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  tr:last-child td { border-bottom: none; }
+  .qty { font-family: 'SF Mono', monospace; color: var(--green); }
+  .empty-state { text-align: center; padding: 32px; color: var(--text-muted); font-size: 13px; }
+
+  .logs {
+    max-height: 150px; overflow-y: auto;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px; line-height: 1.6;
+  }
+  .log-line { color: var(--text-muted); }
+  .log-line.info { color: var(--blue); }
+  .log-line.ok { color: var(--green); }
+  .log-line.warn { color: var(--orange); }
+  .log-line.error { color: var(--red); }
+
+  @media (min-width: 768px) {
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>P2CLPFD Solver Trace</h1>
+    <span class="status-badge" id="status">disconnected</span>
+  </header>
+
+  <div class="meta" id="meta"></div>
+
+  <div class="grid grid-2">
+    <div class="card" id="varCard">
+      <div class="card-title">Decision Variables</div>
+      <div id="vars"><div class="empty-state">Waiting for solver...</div></div>
+    </div>
+    <div class="card" id="tcoCard">
+      <div class="card-title">Best TCO</div>
+      <div id="tcoDisplay"><div class="empty-state">—</div></div>
+      <div style="margin-top:16px">
+        <div class="card-title">Solutions Found</div>
+        <div id="solList"><div class="empty-state">None yet</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="allocationCard" style="margin-top:24px;display:none">
+    <div class="card-title">Optimal Allocation</div>
+    <div id="allocation"><div class="empty-state">—</div></div>
+  </div>
+
+  <div class="card" style="margin-top:24px">
+    <div class="card-title">Event Log</div>
+    <div class="logs" id="logs"><div class="empty-state">Waiting for connection...</div></div>
+  </div>
+</div>
+
+<script>
+const WS_URL = `ws://${location.host}/solve/trace?csv_path=sample.csv`;
+
+const el = (id) => document.getElementById(id);
+const statusEl = el('status');
+const metaEl = el('meta');
+const varsEl = el('vars');
+const tcoDisplay = el('tcoDisplay');
+const solList = el('solList');
+const allocEl = el('allocation');
+const allocCard = el('allocationCard');
+const logsEl = el('logs');
+
+let logCount = 0;
+let solutions = [];
+let bestTCO = null;
+let varDomains = {};
+
+function log(msg, type = 'info') {
+  logCount++;
+  const div = document.createElement('div');
+  div.className = `log-line ${type}`;
+  div.textContent = `[${logCount}] ${msg}`;
+  logsEl.appendChild(div);
+  logsEl.scrollTop = logsEl.scrollHeight;
+  const empty = logsEl.querySelector('.empty-state');
+  if (empty) empty.remove();
+}
+
+function setStatus(text, klass) {
+  statusEl.textContent = text;
+  statusEl.className = 'status-badge' + (klass ? ' ' + klass : '');
+}
+
+function renderMeta(parts, suppliers) {
+  metaEl.innerHTML = `
+    <span>Parts: <strong>${parts.join(', ')}</strong></span>
+    <span>Suppliers: <strong>${suppliers.join(', ')}</strong></span>
+  `;
+}
+
+function domainSize(domain) {
+  return domain ? domain.length : 0;
+}
+
+function minMax(domain) {
+  if (!domain || domain.length === 0) return { min: 0, max: 0 };
+  return { min: domain[0], max: domain[domain.length - 1] };
+}
+
+function renderVars(vars, phase) {
+  if (!vars || vars.length === 0) return;
+  for (const v of vars) {
+    varDomains[v.name] = { domain: v.domain, phase: phase };
+  }
+  let html = '';
+  // Global min/max for bar scaling
+  let allMax = 0;
+  for (const name in varDomains) {
+    const { min, max } = minMax(varDomains[name].domain);
+    if (max > allMax) allMax = max;
+  }
+  for (const name in varDomains) {
+    const { domain, phase: lastPhase } = varDomains[name];
+    const size = domainSize(domain);
+    const { min, max } = minMax(domain);
+    const pct = allMax > 0 ? (size / (allMax + 1)) * 100 : 100;
+    const barClass = lastPhase === 'final' ? 'solved' : (size < 10 ? 'narrow' : '');
+    html += `
+      <div class="var-row">
+        <div class="var-label">
+          <span class="var-name">${name}</span>
+          <span class="var-domain">[${min}..${max}] (${size} values)</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill ${barClass}" style="width:${pct}%"></div>
+        </div>
+      </div>
+    `;
+  }
+  varsEl.innerHTML = html;
+}
+
+function addSolution(tco, type) {
+  solutions.push({ tco, type });
+  if (bestTCO === null || tco < bestTCO) bestTCO = tco;
+  html = solutions.map(s => `
+    <div class="sol-item">
+      <span class="tco">$${s.tco.toLocaleString()}</span>
+      <span class="type ${s.type}">${s.type}</span>
+    </div>
+  `).join('');
+  solList.innerHTML = html || '<div class="empty-state">None yet</div>';
+  tcoDisplay.innerHTML = bestTCO !== null
+    ? `<div class="tco-display">$${bestTCO.toLocaleString()} <div class="label">Best TCO</div></div>`
+    : '<div class="empty-state">—</div>';
+}
+
+function renderAllocation(data) {
+  if (!data.allocation || data.allocation.length === 0) return;
+  allocCard.style.display = 'block';
+  let html = '<table><thead><tr><th>Part</th><th>Supplier</th><th>Quantity</th></tr></thead><tbody>';
+  for (const part of data.allocation) {
+    let firstRow = true;
+    for (const sup of part.suppliers) {
+      html += `<tr><td>${firstRow ? part.part : ''}</td><td>${sup.supplier}</td><td class="qty">${sup.qty.toLocaleString()}</td></tr>`;
+      firstRow = false;
+    }
+  }
+  html += '</tbody></table>';
+  allocEl.innerHTML = html;
+  log(`Optimal allocation: $${data.tco?.toLocaleString()}`, 'ok');
+}
+
+function handleEvent(data) {
+  switch (data.event) {
+
+    case 'connected':
+      setStatus('connected', 'connected');
+      log(`Connected. CSV: ${data.csv_path}`, 'info');
+      break;
+
+    case 'model_built':
+      renderMeta(data.parts, data.suppliers);
+      log(`Model built: ${data.parts.length} parts × ${data.suppliers.length} suppliers`, 'info');
+      break;
+
+    case 'domain_snapshot':
+      if (data.phase === 'final') {
+        renderVars(data.vars, 'final');
+        log(`Final domains (${data.vars.length} assigned vars)`, 'ok');
+      } else {
+        renderVars(data.vars, data.phase);
+        log(`Domains snap: ${data.phase} (${data.vars.length} vars)`, 'info');
+      }
+      break;
+
+    case 'phase':
+      if (data.phase === 'searching') {
+        setStatus('searching...', 'searching');
+        log('Search started (branch & bound)', 'info');
+      } else if (data.phase === 'optimal') {
+        setStatus('optimal', 'optimal');
+        log('Optimal solution found', 'ok');
+      }
+      break;
+
+    case 'solution_found':
+      addSolution(data.tco, data.type || 'improved');
+      if (data.type === 'first') {
+        log(`First feasible: $${data.tco}`, 'info');
+      } else {
+        log(`Improved: $${data.tco}`, 'info');
+      }
+      break;
+
+    case 'optimal':
+      if (data.tco && (!bestTCO || data.tco < bestTCO)) {
+        addSolution(data.tco, 'optimal');
+      }
+      log(`Optimal TCO: $${(data.tco || bestTCO)?.toLocaleString()}`, 'ok');
+      break;
+
+    case 'allocation':
+      renderAllocation(data);
+      break;
+
+    case 'infeasible':
+      setStatus('infeasible', 'error');
+      log('No feasible allocation exists', 'error');
+      break;
+
+    case 'error':
+      setStatus('error', 'error');
+      log(`Error: ${data.message}`, 'error');
+      break;
+
+    default:
+      log(`Event: ${data.event}`, 'info');
+  }
+}
+
+function connect() {
+  setStatus('connecting...', '');
+  log(`Connecting to ${WS_URL}...`, 'info');
+  const ws = new WebSocket(WS_URL);
+  ws.onopen = () => { setStatus('connected', 'connected'); log('WebSocket open', 'ok'); };
+  ws.onmessage = (e) => {
+    try { handleEvent(JSON.parse(e.data)); }
+    catch (err) { log(`Parse error: ${err.message}`, 'error'); }
+  };
+  ws.onerror = (e) => { setStatus('connection error', 'error'); log('WebSocket error', 'error'); };
+  ws.onclose = (e) => {
+    if (e.code !== 1000) {
+      setStatus('disconnected', '');
+      log(`Disconnected (code ${e.code})`, 'warn');
+      setTimeout(connect, 3000);
+    }
+  };
+}
+
+connect();
+</script>
+</body>
+</html>

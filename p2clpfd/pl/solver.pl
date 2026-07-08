@@ -77,9 +77,34 @@ effective_unit_cost(Supplier, Part, Q, EffCost) :-
     ->  find_active_tier(Supplier, Part, Q, RawCost)
     ;   cost(Supplier, Part, RawCost)
     ),
+    landed_unit_cost(Supplier, RawCost, Landed),
     (   noncost_adjustment(Supplier, Adj)
-    ->  EffCost is RawCost + Adj
-    ;   EffCost = RawCost
+    ->  EffCost is Landed + Adj
+    ;   EffCost = Landed
+    ).
+
+%! landed_unit_cost(+Supplier, +RawCost, -Landed) is det.
+%
+%  Folds region-based FX and logistics into the invoice price:
+%    Landed = RawCost * FxPct // 100 + LogisticsPerUnit
+%  FxPct is an integer percentage (105 = +5%). Suppliers with no
+%  region/2 fact (or regions with no fx/logistics facts) are unchanged.
+%
+landed_unit_cost(Supplier, RawCost, Landed) :-
+    supplier_fx_pct(Supplier, Fx),
+    supplier_logistics(Supplier, Log),
+    Landed is (RawCost * Fx) // 100 + Log.
+
+supplier_fx_pct(Supplier, Fx) :-
+    (   region(Supplier, Region), fx_rate(Region, Fx0)
+    ->  Fx = Fx0
+    ;   Fx = 100
+    ).
+
+supplier_logistics(Supplier, Log) :-
+    (   region(Supplier, Region), logistics_cost(Region, Log0)
+    ->  Log = Log0
+    ;   Log = 0
     ).
 
 find_active_tier(Supplier, Part, Q, RawCost) :-
@@ -91,6 +116,69 @@ find_active_tier(Supplier, Part, Q, RawCost) :-
 moq_of(Supplier, Part, Moq) :-
     moq(Supplier, Part, Moq), !.
 moq_of(_, _, 0).
+
+%% ------------------------------------------------------------------ %%
+%%  QUALIFICATION GATES (hard disqualification, not cost adjustments)  %%
+%% ------------------------------------------------------------------ %%
+%%
+%%  A disqualified (Part, Supplier) pair is treated exactly like a
+%%  non-allocatable one: Q is pinned to 0 at model-build time, so no
+%%  cost advantage can override the gate.
+%%
+%%  Conservative semantics: when a gate threshold exists but the
+%%  supplier has NO data on record (no otif/2, no lead_time/3), the
+%%  supplier is disqualified — unknown performance fails qualification.
+
+%! qualified(+Part, +Supplier) is semidet.
+qualified(Part, Supplier) :-
+    \+ disqualified(Part, Supplier, _).
+
+%! disqualified(?Part, ?Supplier, -Reason) is nondet.
+%
+%  Reasons:
+%    otif_below_threshold(Actual, Threshold)   Actual may be 'unknown'
+%    lead_time_exceeded(Actual, MaxDays)       Actual may be 'unknown'
+%    missing_certification(Cert)
+%
+disqualified(_Part, Supplier, otif_below_threshold(Actual, Threshold)) :-
+    min_otif(Threshold),
+    (   otif(Supplier, Actual)
+    ->  Actual < Threshold
+    ;   Actual = unknown
+    ).
+disqualified(Part, Supplier, lead_time_exceeded(Actual, MaxDays)) :-
+    max_lead_time(Part, MaxDays),
+    (   lead_time(Supplier, Part, Actual)
+    ->  Actual > MaxDays
+    ;   Actual = unknown
+    ).
+disqualified(_Part, Supplier, missing_certification(Cert)) :-
+    required_certification(Cert),
+    \+ certification(Supplier, Cert).
+disqualified(Part, Supplier, missing_certification(Cert)) :-
+    required_certification(Part, Cert),
+    \+ certification(Supplier, Cert).
+
+%! disqualified_pairs(-Exclusions) is det.
+%
+%  All excluded (Part, Supplier) pairs among otherwise-allocatable
+%  combinations, with human-readable reasons. Used by the JSON API
+%  and the judgment layer to explain WHY a supplier is absent.
+%
+disqualified_pairs(Exclusions) :-
+    parts(Parts),
+    findall(excluded(Part, Supplier, Reasons),
+            ( member(Part, Parts),
+              allocatable_supplier(Part, Supplier),
+              findall(R, disqualified(Part, Supplier, R), Reasons),
+              Reasons \= []
+            ),
+            Exclusions).
+
+allocatable_supplier(Part, Supplier) :-
+    suppliers(Suppliers),
+    member(Supplier, Suppliers),
+    allocatable(Part, Supplier).
 
 capacity_of(Supplier, Part, Cap) :-
     capacity(Supplier, Part, Cap), !.
@@ -143,7 +231,8 @@ build_part_suppliers(Part, Suppliers, Qs, PartCost, Vars, Bs) :-
 build_part_suppliers_(_, [], _, [], [], [], []).
 build_part_suppliers_(Part, [Supplier|Rest], Demand,
                      [q(Supplier,Q,CostC)|Qs], [CostC|Cs], [Q,B|Vs], [B|Bs]) :-
-    (   allocatable(Part, Supplier)
+    (   allocatable(Part, Supplier),
+        qualified(Part, Supplier)
     ->  Q in 0..Demand,
         B in 0..1,
         B #= 1 #<==> Q #>= 1,
@@ -224,10 +313,13 @@ tiered_pricing(Supplier, Part, Q, CostC, TierVar) :-
     TierVar in 1..N,
     tiers_raw_costs(Tiers, RawCosts),
     element(TierVar, RawCosts, RawUnitCost),
-    (   noncost_adjustment(Supplier, Adj)
-    ->  EffUnitCost #= RawUnitCost + Adj
-    ;   EffUnitCost = RawUnitCost
+    supplier_fx_pct(Supplier, Fx),
+    supplier_logistics(Supplier, Log),
+    (   noncost_adjustment(Supplier, Adj0)
+    ->  Adj = Adj0
+    ;   Adj = 0
     ),
+    EffUnitCost #= (RawUnitCost * Fx) // 100 + Log + Adj,
     CostC #= Q * EffUnitCost,
     post_tier_bounds(Tiers, TierVar, Q, 1).
 
@@ -466,7 +558,22 @@ verify_allocation(Allocation, TCO) :-
     verify_global_capacity(Allocation),
     verify_risk(Allocation),
     verify_global_share(Allocation),
+    verify_qualification(Allocation),
     verify_tco(Allocation, TCO).
+
+%! verify_qualification(+Allocation) is det.
+%  No disqualified supplier may hold a positive allocation.
+verify_qualification(Allocation) :-
+    forall(( member(alloc(Part, Qs), Allocation),
+             member(q(Supplier, Q), Qs),
+             Q > 0
+           ),
+           (   qualified(Part, Supplier)
+           ->  true
+           ;   disqualified(Part, Supplier, Reason),
+               format('  !! QUALIFICATION VIOLATION: ~w/~w allocated ~w but disqualified: ~w~n',
+                      [Supplier, Part, Q, Reason])
+           )).
 
 verify_part(Part, Qs) :-
     demand(Part, Demand),
@@ -656,7 +763,22 @@ validate_facts :-
     validate_demand_exists,
     validate_cost_exists,
     validate_share_ranges,
+    validate_qualification,
     format('=== Validation Complete ===~n~n').
+
+%! validate_qualification is det.
+%  Warns when qualification gates disqualify EVERY supplier of a part —
+%  a guaranteed infeasibility.
+validate_qualification :-
+    parts(Parts),
+    forall(member(Part, Parts),
+           (   findall(S, allocatable_supplier(Part, S), All),
+               All \= [],
+               forall(member(S, All), \+ qualified(Part, S))
+           ->  format('  !! ALL SUPPLIERS DISQUALIFIED: part ~w has no qualified supplier (gates too strict)~n',
+                      [Part])
+           ;   true
+           )).
 
 %! validate_tiers is det.
 %  Checks that price_tier/5 facts for each pair are non-overlapping

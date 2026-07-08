@@ -14,7 +14,23 @@
 %%%   part,supplier,demand,unit_cost,capacity,moq,
 %%%   share_min,share_max,noncost_adj,fixed_cost,
 %%%   min_suppliers,max_suppliers,dual_source,
-%%%   global_capacity,global_share_cap
+%%%   global_capacity,global_share_cap,
+%%%   otif,min_otif,lead_time,max_lead_time,
+%%%   certifications,required_certs
+%%%
+%%% Qualification columns (all optional):
+%%%   otif           per-supplier OTIF %% (0..100)
+%%%   min_otif       global OTIF gate; suppliers below (or with no otif)
+%%%                  are disqualified from all parts
+%%%   lead_time      per part+supplier quoted lead time (days)
+%%%   max_lead_time  per-part lead-time gate (days)
+%%%   certifications per-supplier, semicolon-separated (iso9001;iatf16949)
+%%%   required_certs per-part, semicolon-separated
+%%%
+%%% Landed-cost columns (all optional):
+%%%   region         per-supplier region atom (china, eu, local, ...)
+%%%   fx_rate        FX multiplier as integer % for that row's region
+%%%   logistics_cost per-unit freight/customs for that row's region
 %%%
 %%% Empty cells are treated as "absent" (no constraint / default).
 %%% Per-part and per-supplier attributes may appear in any row of
@@ -39,6 +55,17 @@
 :- dynamic max_suppliers/2.
 :- dynamic dual_source/1.
 :- dynamic max_global_share/2.
+:- dynamic rebate/3.
+:- dynamic otif/2.
+:- dynamic min_otif/1.
+:- dynamic lead_time/3.
+:- dynamic max_lead_time/2.
+:- dynamic certification/2.
+:- dynamic required_certification/1.
+:- dynamic required_certification/2.
+:- dynamic region/2.
+:- dynamic fx_rate/2.
+:- dynamic logistics_cost/2.
 
 %% ------------------------------------------------------------------ %%
 %%  PUBLIC API                                                         %%
@@ -97,7 +124,18 @@ retract_all_facts :-
     retractall(min_suppliers(_, _)),
     retractall(max_suppliers(_, _)),
     retractall(dual_source(_)),
-    retractall(max_global_share(_, _)).
+    retractall(max_global_share(_, _)),
+    retractall(rebate(_, _, _)),
+    retractall(otif(_, _)),
+    retractall(min_otif(_)),
+    retractall(lead_time(_, _, _)),
+    retractall(max_lead_time(_, _)),
+    retractall(certification(_, _)),
+    retractall(required_certification(_)),
+    retractall(required_certification(_, _)),
+    retractall(region(_, _)),
+    retractall(fx_rate(_, _)),
+    retractall(logistics_cost(_, _)).
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%
@@ -149,9 +187,18 @@ assert_row_facts(Pairs) :-
     assert_part_fact(min_suppliers, min_suppliers(Part, _), Part, Pairs),
     assert_part_fact(max_suppliers, max_suppliers(Part, _), Part, Pairs),
     assert_dual_source_fact(Part, Pairs),
+    assert_pair_fact(lead_time, lead_time(_, Part, _), Supplier-Part, Pairs),
+    % Per-part facts
+    assert_part_fact(max_lead_time, max_lead_time(Part, _), Part, Pairs),
+    assert_required_certs_fact(Part, Pairs),
     % Per-supplier facts
     assert_supplier_fact(global_capacity, global_capacity(_, _), Supplier, Pairs),
-    assert_supplier_fact(global_share_cap, max_global_share(_, _), Supplier, Pairs).
+    assert_supplier_fact(global_share_cap, max_global_share(_, _), Supplier, Pairs),
+    assert_supplier_fact(otif, otif(_, _), Supplier, Pairs),
+    assert_certifications_fact(Supplier, Pairs),
+    assert_region_facts(Supplier, Pairs),
+    % Global facts (may appear on any row; last non-empty wins)
+    assert_global_min_otif(Pairs).
 
 %% --- Per-pair facts (last non-empty value per CSV key wins) ----------
 
@@ -182,6 +229,11 @@ assert_pair_fact(CSVKey, Template, Key, Pairs) :-
     ->  (   Key = Supplier-Part
         ->  retractall(fixed_cost(Supplier, Part, _)),
             assert(fixed_cost(Supplier, Part, Number))
+        )
+    ;   Template = lead_time(_, Part, _)
+    ->  (   Key = Supplier-Part
+        ->  retractall(lead_time(Supplier, Part, _)),
+            assert(lead_time(Supplier, Part, Number))
         )
     ).
 assert_pair_fact(_, _, _, _).
@@ -227,6 +279,9 @@ assert_part_fact(CSVKey, Template, Part, Pairs) :-
     ;   Template = max_suppliers(Part, _)
     ->  retractall(max_suppliers(Part, _)),
         assert(max_suppliers(Part, Number))
+    ;   Template = max_lead_time(Part, _)
+    ->  retractall(max_lead_time(Part, _)),
+        assert(max_lead_time(Part, Number))
     ).
 assert_part_fact(_, _, _, _).
 
@@ -251,8 +306,75 @@ assert_supplier_fact(CSVKey, Template, Supplier, Pairs) :-
     ;   Template = max_global_share(_, _)
     ->  retractall(max_global_share(Supplier, _)),
         assert(max_global_share(Supplier, Number))
+    ;   Template = otif(_, _)
+    ->  retractall(otif(Supplier, _)),
+        assert(otif(Supplier, Number))
     ).
 assert_supplier_fact(_, _, _, _).
+
+%% --- Qualification gate facts ----------------------------------------
+%   certifications:  per-supplier, semicolon-separated (e.g. "iso9001;iatf16949")
+%   required_certs:  per-part, semicolon-separated
+%   min_otif:        global threshold (may appear on any row)
+
+assert_certifications_fact(Supplier, Pairs) :-
+    member(certifications-Value, Pairs),
+    Value \= '',
+    !,
+    retractall(certification(Supplier, _)),
+    split_cert_list(Value, Certs),
+    forall(member(C, Certs), assert(certification(Supplier, C))).
+assert_certifications_fact(_, _).
+
+assert_required_certs_fact(Part, Pairs) :-
+    member(required_certs-Value, Pairs),
+    Value \= '',
+    !,
+    retractall(required_certification(Part, _)),
+    split_cert_list(Value, Certs),
+    forall(member(C, Certs), assert(required_certification(Part, C))).
+assert_required_certs_fact(_, _).
+
+assert_global_min_otif(Pairs) :-
+    member(min_otif-Value, Pairs),
+    Value \= '',
+    !,
+    to_number(Value, Number),
+    retractall(min_otif(_)),
+    assert(min_otif(Number)).
+assert_global_min_otif(_).
+
+%% --- Landed cost facts ------------------------------------------------
+%   region:          per-supplier region atom (e.g. china, eu, local)
+%   fx_rate:         per-region FX multiplier as integer % (105 = +5%)
+%   logistics_cost:  per-region per-unit freight/customs cost
+%   fx_rate / logistics_cost apply to the region named in the same row.
+
+assert_region_facts(Supplier, Pairs) :-
+    (   member(region-RegionVal, Pairs), RegionVal \= ''
+    ->  retractall(region(Supplier, _)),
+        assert(region(Supplier, RegionVal)),
+        (   member(fx_rate-FxVal, Pairs), FxVal \= ''
+        ->  to_number(FxVal, Fx),
+            retractall(fx_rate(RegionVal, _)),
+            assert(fx_rate(RegionVal, Fx))
+        ;   true
+        ),
+        (   member(logistics_cost-LogVal, Pairs), LogVal \= ''
+        ->  to_number(LogVal, Log),
+            retractall(logistics_cost(RegionVal, _)),
+            assert(logistics_cost(RegionVal, Log))
+        ;   true
+        )
+    ;   true
+    ).
+
+%! split_cert_list(+Value, -Certs) is det.
+%  Splits a semicolon-separated cell into a list of atoms.
+split_cert_list(Value, Certs) :-
+    atom_string(Value, Str),
+    split_string(Str, ";", " \t", Parts),
+    findall(C, (member(P, Parts), P \= "", atom_string(C, P)), Certs).
 
 %% ------------------------------------------------------------------ %%
 %%  EXAMPLE QUERIES                                                    %%

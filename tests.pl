@@ -19,6 +19,17 @@
 :- dynamic max_suppliers/2.
 :- dynamic dual_source/1.
 :- dynamic max_global_share/2.
+:- dynamic rebate/3.
+:- dynamic otif/2.
+:- dynamic min_otif/1.
+:- dynamic lead_time/3.
+:- dynamic max_lead_time/2.
+:- dynamic certification/2.
+:- dynamic required_certification/1.
+:- dynamic required_certification/2.
+:- dynamic region/2.
+:- dynamic fx_rate/2.
+:- dynamic logistics_cost/2.
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%
@@ -37,7 +48,18 @@ clear :-
     retractall(max_suppliers(_,_)),
     retractall(dual_source(_)),
     retractall(max_global_share(_,_)),
-    retractall(price_tier(_,_,_,_,_)).
+    retractall(price_tier(_,_,_,_,_)),
+    retractall(rebate(_,_,_)),
+    retractall(otif(_,_)),
+    retractall(min_otif(_)),
+    retractall(lead_time(_,_,_)),
+    retractall(max_lead_time(_,_)),
+    retractall(certification(_,_)),
+    retractall(required_certification(_)),
+    retractall(required_certification(_,_)),
+    retractall(region(_,_)),
+    retractall(fx_rate(_,_)),
+    retractall(logistics_cost(_,_)).
 
 setup_minimal :-
     clear,
@@ -113,13 +135,13 @@ test(optimal_tco) :-
 :- begin_tests(moq).
 
 test(respected) :-
-    setup_minimal, assert(moq(supplier1, part1, 50)),
+    setup_minimal, assert(user:moq(supplier1, part1, 50)),
     solve(A, _), !,
     member(alloc(part1, Qs), A), member(q(supplier1, Q1), Qs),
     (Q1 =:= 0 ; Q1 >= 50).
 
 test(gap_domain) :-
-    setup_minimal, assert(moq(supplier1, part1, 90)),
+    setup_minimal, assert(user:moq(supplier1, part1, 90)),
     solve(A, _), !,
     member(alloc(part1, Qs), A), member(q(supplier1, Q1), Qs),
     (Q1 =:= 0 ; Q1 >= 90).
@@ -147,8 +169,8 @@ test(min_enforced) :-
 
 test(max_binds) :-
     setup_full,
-    retractall(share(part1, supplier1, _, _)),
-    assert(share(part1, supplier1, 0, 10)),
+    retractall(user:share(part1, supplier1, _, _)),
+    assert(user:share(part1, supplier1, 0, 10)),
     solve(A, _), !,
     member(alloc(part1, Qs), A), member(q(supplier1, Q1), Qs),
     Pct is Q1 * 100 // 250, Pct =< 10.
@@ -169,8 +191,8 @@ test(max_suppliers) :-
 
 test(min_suppliers) :-
     setup_full,
-    retractall(dual_source(part1)),
-    assert(min_suppliers(part1, 2)),
+    retractall(user:dual_source(part1)),
+    assert(user:min_suppliers(part1, 2)),
     solve(A, _), !,
     member(alloc(part1, Qs), A), count_active(Qs, N), N >= 2.
 
@@ -210,7 +232,7 @@ test(volume_discount) :-
 
 test(flat_fallback) :-
     setup_full,
-    retractall(price_tier(supplier1, part1, _, _, _)),
+    retractall(user:price_tier(supplier1, part1, _, _, _)),
     solve(A, _), !,
     member(alloc(part1, Qs), A), member(q(supplier1, Q1), Qs), Q1 >= 0.
 
@@ -243,19 +265,19 @@ test(good_facts) :-
 
 test(detects_tier_gap) :-
     setup_full,
-    retractall(price_tier(supplier1, part1, _, _, _)),
-    assert(price_tier(supplier1, part1, 0, 39, 100)),
-    assert(price_tier(supplier1, part1, 50, sup, 40)),
+    retractall(user:price_tier(supplier1, part1, _, _, _)),
+    assert(user:price_tier(supplier1, part1, 0, 39, 100)),
+    assert(user:price_tier(supplier1, part1, 50, sup, 40)),
     validate_facts.
 
 test(detects_moq_over_cap) :-
-    clear, assert(demand(part1, 100)), assert(cost(supplier1, part1, 10)),
-    assert(moq(supplier1, part1, 80)), assert(capacity(supplier1, part1, 50)),
+    clear, assert(user:demand(part1, 100)), assert(user:cost(supplier1, part1, 10)),
+    assert(user:moq(supplier1, part1, 80)), assert(user:capacity(supplier1, part1, 50)),
     validate_facts.
 
 test(detects_missing_cost) :-
-    clear, assert(demand(part1, 100)),
-    assert(capacity(supplier1, part1, 100)),
+    clear, assert(user:demand(part1, 100)),
+    assert(user:capacity(supplier1, part1, 100)),
     validate_facts.
 
 :- end_tests(validation).
@@ -278,10 +300,131 @@ test(then_validate) :-
 
 %% ------------------------------------------------------------------ %%
 
+:- begin_tests(qualification).
+
+test(otif_gate_disqualifies_cheapest) :-
+    setup_minimal,                         % supplier1 @10, supplier2 @20
+    assert(user:otif(supplier1, 90)),
+    assert(user:otif(supplier2, 97)),
+    assert(user:min_otif(95)),
+    solve(A, TCO), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 0), Qs),           % cheapest excluded by gate
+    member(q(supplier2, 100), Qs),
+    TCO =:= 2000.
+
+test(otif_unknown_disqualifies) :-
+    setup_minimal,
+    assert(user:otif(supplier2, 97)),           % supplier1 has NO otif data
+    assert(user:min_otif(95)),
+    solve(A, _), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 0), Qs).
+
+test(lead_time_gate) :-
+    setup_minimal,
+    assert(user:lead_time(supplier1, part1, 45)),
+    assert(user:lead_time(supplier2, part1, 20)),
+    assert(user:max_lead_time(part1, 30)),
+    solve(A, _), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 0), Qs),
+    member(q(supplier2, 100), Qs).
+
+test(certification_gate_per_part) :-
+    setup_minimal,
+    assert(user:certification(supplier2, iso9001)),
+    assert(user:required_certification(part1, iso9001)),
+    solve(A, _), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 0), Qs),
+    member(q(supplier2, 100), Qs).
+
+test(certification_gate_global) :-
+    setup_minimal,
+    assert(user:certification(supplier2, iso9001)),
+    assert(user:required_certification(iso9001)),
+    solve(A, _), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier2, 100), Qs).
+
+test(all_disqualified_infeasible, [fail]) :-
+    setup_minimal,
+    assert(user:min_otif(95)),                  % nobody has otif data
+    solve(_, _).
+
+test(no_gates_no_effect) :-
+    setup_minimal,
+    assert(user:otif(supplier1, 80)),           % data present but no min_otif gate
+    solve(_, TCO), !,
+    TCO =:= 1000.
+
+test(disqualified_pairs_reports_reason) :-
+    setup_minimal,
+    assert(user:otif(supplier1, 90)),
+    assert(user:min_otif(95)),
+    disqualified_pairs(Ex),
+    member(excluded(part1, supplier1, Reasons), Ex),
+    member(otif_below_threshold(90, 95), Reasons).
+
+:- end_tests(qualification).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(landed_cost).
+
+test(fx_changes_winner) :-
+    setup_minimal,                          % s1 @10, s2 @20
+    assert(user:region(supplier1, overseas)),
+    assert(user:fx_rate(overseas, 250)),         % s1 landed: 10*2.5 = 25 > 20
+    solve(A, TCO), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier2, 100), Qs),
+    TCO =:= 2000.
+
+test(logistics_added_per_unit) :-
+    setup_minimal,
+    assert(user:region(supplier1, overseas)),
+    assert(user:logistics_cost(overseas, 5)),    % s1 landed: 10+5 = 15, still wins
+    solve(A, TCO), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 100), Qs),
+    TCO =:= 1500.
+
+test(fx_and_logistics_combined) :-
+    setup_minimal,
+    assert(user:region(supplier1, overseas)),
+    assert(user:fx_rate(overseas, 110)),         % 10*1.10 = 11
+    assert(user:logistics_cost(overseas, 2)),    % + 2 = 13
+    solve(_, TCO), !,
+    TCO =:= 1300.
+
+test(tiered_pricing_with_fx) :-
+    clear,
+    assert(user:demand(part1, 100)),
+    assert(user:price_tier(supplier1, part1, 0, 49, 20)),
+    assert(user:price_tier(supplier1, part1, 50, sup, 10)),
+    assert(user:region(supplier1, overseas)),
+    assert(user:fx_rate(overseas, 120)),         % tier2 landed: 12
+    solve(A, TCO), !,
+    member(alloc(part1, Qs), A),
+    member(q(supplier1, 100), Qs),
+    TCO =:= 1200.
+
+test(no_region_unchanged) :-
+    setup_minimal,
+    assert(user:fx_rate(overseas, 300)),         % no supplier in that region
+    solve(_, TCO), !,
+    TCO =:= 1000.
+
+:- end_tests(landed_cost).
+
+%% ------------------------------------------------------------------ %%
+
 :- begin_tests(edge).
 
 test(zero_demand) :-
-    clear, assert(demand(part1, 0)), assert(cost(supplier1, part1, 10)),
+    clear, assert(user:demand(part1, 0)), assert(user:cost(supplier1, part1, 10)),
     solve(_, TCO), !, TCO =:= 0.
 
 :- end_tests(edge).

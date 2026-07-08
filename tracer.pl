@@ -41,7 +41,7 @@ solve_with_trace(Allocation, TCO, Stream) :-
 
     emit(Stream, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO)], Vars)
+    (   labeling([min(TCO), ff], Vars)
     ->  materialize(RawAlloc, Allocation),
         emit_domains_ground(Stream, Allocation, TCO, "final"),
         emit(Stream, _{event:"phase", phase:"optimal"}),
@@ -64,7 +64,7 @@ solve_with_trace(Allocation, TCO, Stream, MaxCost) :-
     TCO #=< MaxCost,
     emit(Stream, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO)], Vars)
+    (   labeling([min(TCO), ff], Vars)
     ->  materialize(RawAlloc, Allocation),
         emit_domains_ground(Stream, Allocation, TCO, "final"),
         emit(Stream, _{event:"phase", phase:"optimal"}),

@@ -159,7 +159,7 @@ solve_with_trace_ws(WebSocket) :-
     send_ws_domains(WebSocket, RawAlloc, "initial"),
     send_ws(WebSocket, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO)], Vars)
+    (   labeling([min(TCO), ff], Vars)
     ->  materialize(RawAlloc, Allocation),
         send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
         send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
@@ -179,7 +179,7 @@ solve_with_trace_ws(WebSocket, MaxCost) :-
     send_ws_domains(WebSocket, RawAlloc, "initial"),
     send_ws(WebSocket, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO)], Vars)
+    (   labeling([min(TCO), ff], Vars)
     ->  materialize(RawAlloc, Allocation),
         send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
         send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
@@ -352,6 +352,16 @@ json_override_to_prolog(JSON, Override) :-
 %% ------------------------------------------------------------------ %%
 %%  STANDALONE JSON (no HTTP)                                          %%
 %% ------------------------------------------------------------------ %%
+
+%! disqualified_to_json(-JSON) is det.
+%  Excluded (part, supplier) pairs with reasons, as JSON dicts.
+disqualified_to_json(JSON) :-
+    disqualified_pairs(Exclusions),
+    findall(_{part:P, supplier:S, reasons:RStrs},
+            ( member(excluded(P, S, Rs), Exclusions),
+              findall(RStr, (member(R, Rs), term_string(R, RStr)), RStrs)
+            ),
+            JSON).
 
 %! solve_to_json(-JSON) is det.
 %  Solve using already-loaded facts, return JSON dict.

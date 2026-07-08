@@ -94,8 +94,7 @@ apply_overrides([O|Rest], [Undo|UndoRest]) :-
 
 apply_one_override(set(Fact), Undo) :-
     !,
-    functor(Fact, Name, Arity),
-    functor(Template, Name, Arity),
+    fact_key_template(Fact, Template),
     findall(Template, call(Template), Saved),
     retractall(Template),
     assert(Fact),
@@ -126,6 +125,25 @@ apply_one_override(demand_delta(Part, Pct), Undo) :-
         Undo = restored(demand(Part, _), [demand(Part, Old)])
     ;   Undo = restored(demand(Part, _), [])
     ).
+
+%! fact_key_template(+Fact, -Template) is det.
+%
+%  Template matches only the facts that Fact should REPLACE — same key,
+%  any value. By convention the last argument is the value and the rest
+%  are the key (share/4 has a two-argument key). Arity-1 facts are
+%  matched exactly. Without this, set(cost(s2,p1,15)) would wipe ALL
+%  cost/3 facts, not just the one being replaced.
+%
+fact_key_template(share(P, S, _, _), share(P, S, _, _)) :- !.
+fact_key_template(Fact, Template) :-
+    functor(Fact, Name, Arity),
+    Arity >= 2,
+    !,
+    Fact =.. [Name|Args],
+    append(Key, [_OldValue], Args),
+    append(Key, [_AnyValue], TArgs),
+    Template =.. [Name|TArgs].
+fact_key_template(Fact, Fact).
 
 %! restore_overrides(+UndoList).
 %  Reverts all overrides using the saved state.

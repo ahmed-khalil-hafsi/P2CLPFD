@@ -421,6 +421,59 @@ test(no_region_unchanged) :-
 
 %% ------------------------------------------------------------------ %%
 
+:- begin_tests(sensitivity).
+
+% demand 100; s1 @10 capped at 50; s2 @20 uncapped.
+% Optimum: 50 from s1 + 50 from s2, TCO 1500. s1's capacity is binding.
+setup_capped :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    assert(user:capacity(supplier1, part1, 50)).
+
+test(binding_capacity_detected) :-
+    setup_capped,
+    sensitivity(1, sensitivity(TCO, Bindings, _)),
+    TCO =:= 1500,
+    member(binding(capacity(supplier1, part1), 50, 50), Bindings).
+
+test(shadow_price_of_capacity) :-
+    setup_capped,
+    sensitivity(10, sensitivity(1500, _, Shadows)),
+    member(shadow(capacity(supplier1, part1), 60, 1400, 100), Shadows).
+
+test(no_binding_no_levers) :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    sensitivity(1, sensitivity(1000, Bindings, Shadows)),
+    Bindings == [],
+    Shadows == [].
+
+test(moq_binding_detected) :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    assert(user:capacity(supplier1, part1, 40)),
+    assert(user:moq(supplier2, part1, 60)),
+    sensitivity(1, sensitivity(_, Bindings, _)),
+    member(binding(moq(supplier2, part1), 60, 60), Bindings).
+
+test(set_override_keeps_sibling_facts) :-
+    setup_capped,
+    % If set/1 wiped all cost facts, supplier2 would vanish and the
+    % scenario would be infeasible (s1 capacity 50 < demand 100).
+    compare_scenarios([b-[], s1_up-[set(cost(supplier1, part1, 12))]], Results),
+    member(result(s1_up, ok, TCO, _), Results),
+    TCO =:= 1600.
+
+:- end_tests(sensitivity).
+
+%% ------------------------------------------------------------------ %%
+
 :- begin_tests(edge).
 
 test(zero_demand) :-

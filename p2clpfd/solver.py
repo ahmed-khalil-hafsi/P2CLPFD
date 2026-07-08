@@ -22,7 +22,8 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    for name in ["facts", "solver", "csv_loader", "scenarios", "json_api", "tracer"]:
+    for name in ["facts", "solver", "csv_loader", "scenarios", "sensitivity",
+                 "json_api", "tracer"]:
         janus.consult(str(_PL_DIR / f"{name}.pl"))
     _LOADED = True
 
@@ -184,6 +185,44 @@ class Solver:
             'with_output_to(string(_), validate_facts)'
         )
         return {"status": "ok"}
+
+    def sensitivity(self, step: int = 1) -> dict:
+        """
+        Find binding constraints and their shadow prices.
+
+        A binding constraint is one the optimal allocation sits exactly
+        against — it is actively shaping the award. Its shadow price is
+        the TCO saving from relaxing it one step.
+
+        Args:
+            step: Relaxation size for quantity constraints (capacity,
+                  global capacity, MOQ). Percentage and supplier-count
+                  constraints always relax by 1.
+
+        Returns:
+            Dict with:
+                - "status": "ok" or "infeasible"
+                - "tco": Baseline optimal TCO
+                - "binding_constraints": [{constraint, supplier, part,
+                                           used, limit}, ...]
+                - "negotiation_levers": [{constraint, supplier, part,
+                                          relaxed_limit, new_tco,
+                                          savings}, ...] sorted by
+                  savings, largest first.
+        """
+        result = janus.query_once(
+            'sensitivity_to_json(Step, JSON)',
+            {'Step': step}
+        )
+        return result.get("JSON", {"status": "error"})
+
+    def disqualified(self) -> list:
+        """
+        List (part, supplier) pairs excluded by qualification gates
+        (OTIF, lead time, certifications), with reasons.
+        """
+        result = janus.query_once('disqualified_to_json(JSON)')
+        return result.get("JSON", [])
 
     def solve_trace(self, max_cost: Optional[int] = None) -> dict:
         """

@@ -17,6 +17,7 @@
 :- ['solver.pl'].
 :- ['csv_loader.pl'].
 :- ['scenarios.pl'].
+:- ['sensitivity.pl'].
 
 %! run is det.
 %  Solve the current facts, print the optimal allocation, and verify it.

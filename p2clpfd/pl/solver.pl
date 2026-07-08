@@ -27,7 +27,7 @@ solve(Allocation, TCO) :-
     parts(Parts),
     suppliers(Suppliers),
     build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
-    labeling([min(TCO)], Vars),
+    labeling([min(TCO), ff], Vars),
     materialize(RawAlloc, Allocation).
 
 %! solve(-Allocation, -TCO, +MaxCost) is nondet.
@@ -39,7 +39,7 @@ solve(Allocation, TCO, MaxCost) :-
     suppliers(Suppliers),
     build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
     TCO #=< MaxCost,
-    labeling([min(TCO)], Vars),
+    labeling([min(TCO), ff], Vars),
     materialize(RawAlloc, Allocation).
 
 %% ------------------------------------------------------------------ %%

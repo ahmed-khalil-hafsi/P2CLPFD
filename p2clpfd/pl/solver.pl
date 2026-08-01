@@ -341,9 +341,12 @@ post_tier_bounds([tier(Min, Max, _)|Rest], TierVar, Q, I) :-
 %%  GLOBAL CAPACITY CONSTRAINTS                                        %%
 %% ------------------------------------------------------------------ %%
 
-build_global_capacity(Suppliers, RawAlloc) :-
-    forall(member(Supplier, Suppliers),
-           global_capacity_constraint(Supplier, RawAlloc)).
+%% Direct recursion, NOT forall/2: forall/2 is double negation, so any
+%% CLP(FD) constraint posted inside it is undone on the way out.
+build_global_capacity([], _).
+build_global_capacity([Supplier|Rest], RawAlloc) :-
+    global_capacity_constraint(Supplier, RawAlloc),
+    build_global_capacity(Rest, RawAlloc).
 
 global_capacity_constraint(Supplier, RawAlloc) :-
     global_capacity_of(Supplier, Cap),

@@ -66,6 +66,9 @@
 :- dynamic region/2.
 :- dynamic fx_rate/2.
 :- dynamic logistics_cost/2.
+:- dynamic period_demand/3.
+:- dynamic period_capacity/4.
+:- dynamic holding_cost/2.
 
 %% ------------------------------------------------------------------ %%
 %%  PUBLIC API                                                         %%
@@ -135,7 +138,10 @@ retract_all_facts :-
     retractall(required_certification(_, _)),
     retractall(region(_, _)),
     retractall(fx_rate(_, _)),
-    retractall(logistics_cost(_, _)).
+    retractall(logistics_cost(_, _)),
+    retractall(period_demand(_, _, _)),
+    retractall(period_capacity(_, _, _, _)),
+    retractall(holding_cost(_, _)).
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%

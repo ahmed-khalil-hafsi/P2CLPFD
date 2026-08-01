@@ -18,6 +18,7 @@
 :- ['csv_loader.pl'].
 :- ['scenarios.pl'].
 :- ['sensitivity.pl'].
+:- ['multiperiod.pl'].
 
 %! run is det.
 %  Solve the current facts, print the optimal allocation, and verify it.

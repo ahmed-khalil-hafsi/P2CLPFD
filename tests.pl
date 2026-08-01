@@ -212,6 +212,36 @@ test(enforced) :-
 
 %% ------------------------------------------------------------------ %%
 
+:- begin_tests(global_capacity).
+
+% Regression: global_capacity/2 was posted inside forall/2, which is
+% double negation — the constraint was undone before labeling and the
+% cap silently never applied.
+test(cap_binds_across_parts) :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:demand(part2, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    assert(user:cost(supplier1, part2, 10)),
+    assert(user:cost(supplier2, part2, 20)),
+    assert(user:global_capacity(supplier1, 60)),
+    solve(A, TCO), !,
+    supplier_total(supplier1, A, Total),
+    Total =:= 60,
+    TCO =:= 3400.                % 60@10 + 140@20
+
+test(infeasible_when_global_caps_below_demand, [fail]) :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:global_capacity(supplier1, 50)),
+    solve(_, _).
+
+:- end_tests(global_capacity).
+
+%% ------------------------------------------------------------------ %%
+
 :- begin_tests(fixed_cost).
 
 test(not_charged_at_zero) :-
@@ -471,6 +501,98 @@ test(set_override_keeps_sibling_facts) :-
     TCO =:= 1600.
 
 :- end_tests(sensitivity).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(multiperiod).
+
+mp_clear :-
+    user:clear,
+    retractall(user:period_demand(_,_,_)),
+    retractall(user:period_capacity(_,_,_,_)),
+    retractall(user:holding_cost(_,_)).
+
+mp_qty(Plan, Part, Period, Supplier, Q) :-
+    member(mp(Part, Period, Qs, _), Plan),
+    member(q(Supplier, Q), Qs).
+
+mp_inventory(Plan, Part, Period, Inv) :-
+    member(mp(Part, Period, _, Inv), Plan).
+
+test(buys_in_period_when_capacity_allows) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:period_demand(part1, 2, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:holding_cost(part1, 2)),
+    solve_multiperiod(Plan, TCO), !,
+    TCO =:= 2000,                          % no carrying cost paid
+    mp_inventory(Plan, part1, 1, 0).
+
+test(buys_ahead_when_capacity_binds) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:period_demand(part1, 2, 300)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:period_capacity(supplier1, part1, 1, 200)),
+    assert(user:period_capacity(supplier1, part1, 2, 200)),
+    assert(user:holding_cost(part1, 2)),
+    solve_multiperiod(Plan, TCO), !,
+    mp_qty(Plan, part1, 1, supplier1, 200),
+    mp_inventory(Plan, part1, 1, 100),     % carried into period 2
+    TCO =:= 4200.                          % 4000 goods + 200 holding
+
+test(infeasible_when_capacity_short_across_horizon, [fail]) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:period_demand(part1, 2, 300)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:period_capacity(supplier1, part1, 1, 150)),
+    assert(user:period_capacity(supplier1, part1, 2, 150)),
+    solve_multiperiod(_, _).
+
+test(picks_cheaper_supplier_per_period) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    solve_multiperiod(Plan, TCO), !,
+    TCO =:= 1000,
+    mp_qty(Plan, part1, 1, supplier1, 100).
+
+test(qualification_gate_applies) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    assert(user:otif(supplier2, 97)),
+    assert(user:min_otif(95)),             % supplier1 has no OTIF data
+    solve_multiperiod(Plan, TCO), !,
+    TCO =:= 2000,
+    mp_qty(Plan, part1, 1, supplier2, 100).
+
+test(global_capacity_is_per_period) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:period_demand(part1, 2, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:cost(supplier2, part1, 20)),
+    assert(user:global_capacity(supplier1, 60)),
+    solve_multiperiod(Plan, TCO), !,
+    mp_qty(Plan, part1, 1, supplier1, 60),  % 60 each period, not 60 total
+    mp_qty(Plan, part1, 2, supplier1, 60),
+    TCO =:= 2800.                           % (60*10 + 40*20) * 2 periods
+
+test(holding_cost_deters_early_buying) :-
+    mp_clear,
+    assert(user:period_demand(part1, 1, 100)),
+    assert(user:period_demand(part1, 2, 100)),
+    assert(user:cost(supplier1, part1, 10)),
+    assert(user:holding_cost(part1, 50)),   % carrying is punitive
+    solve_multiperiod(Plan, _), !,
+    mp_inventory(Plan, part1, 1, 0).
+
+:- end_tests(multiperiod).
 
 %% ------------------------------------------------------------------ %%
 

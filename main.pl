@@ -16,7 +16,10 @@
 :- ['facts.pl'].
 :- ['solver.pl'].
 :- ['csv_loader.pl'].
+:- ['decompose.pl'].
 :- ['scenarios.pl'].
+:- ['sensitivity.pl'].
+:- ['multiperiod.pl'].
 
 %! run is det.
 %  Solve the current facts, print the optimal allocation, and verify it.

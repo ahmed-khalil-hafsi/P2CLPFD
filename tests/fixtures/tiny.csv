@@ -1,0 +1,7 @@
+part,supplier,demand,unit_cost,capacity,moq,share_min,share_max,min_suppliers,global_share_cap
+bolt,alpha,20,10,12,,0,70,2,
+bolt,beta,20,14,15,,0,100,,
+bolt,gamma,20,18,15,,0,100,,
+nut,alpha,15,8,10,,,,2,
+nut,beta,15,11,12,,,,,
+nut,gamma,15,13,12,,,,,

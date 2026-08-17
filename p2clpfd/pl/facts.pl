@@ -8,6 +8,21 @@
 :- dynamic dual_source/1.
 :- dynamic max_global_share/2.
 :- dynamic fixed_cost/3.
+:- dynamic rebate/3.
+:- dynamic otif/2.
+:- dynamic min_otif/1.
+:- dynamic lead_time/3.
+:- dynamic max_lead_time/2.
+:- dynamic certification/2.
+:- dynamic required_certification/1.
+:- dynamic required_certification/2.
+:- dynamic region/2.
+:- dynamic fx_rate/2.
+:- dynamic logistics_cost/2.
+:- dynamic rebate_forced/2.
+:- dynamic supplier_route/2.
+:- dynamic route_capacity/2.
+:- dynamic max_route_share/2.
 %%%
 %%% Schema (all quantities are absolute integers, not percentages):
 %%%
@@ -63,6 +78,46 @@
 %%%   max_global_share(Supplier, Pct).                % optional
 %%%       Supplier's total across all parts may not exceed Pct% of total
 %%%       demand across all parts. Absent => unrestricted.
+%%%
+%%%   --- Qualification gates (hard disqualification, not cost tweaks) ---
+%%%
+%%%   otif(Supplier, Pct).                            % optional
+%%%       Supplier's on-time-in-full delivery performance (0..100).
+%%%
+%%%   min_otif(Pct).                                  % optional
+%%%       Global gate: suppliers below Pct OTIF are disqualified from
+%%%       ALL parts. A supplier with no otif/2 fact is also disqualified
+%%%       (unknown performance fails qualification).
+%%%
+%%%   lead_time(Supplier, Part, Days).                % optional
+%%%       Quoted lead time for the pair.
+%%%
+%%%   max_lead_time(Part, Days).                      % optional
+%%%       Per-part gate: suppliers whose lead time exceeds Days are
+%%%       disqualified from that part. No lead_time/3 fact => disqualified.
+%%%
+%%%   certification(Supplier, Cert).                  % optional
+%%%       Supplier holds certification Cert (e.g. iso9001, iatf16949).
+%%%
+%%%   required_certification(Cert).                   % optional
+%%%   required_certification(Part, Cert).             % optional
+%%%       Global / per-part gate: suppliers lacking Cert are disqualified.
+%%%
+%%%   --- Landed cost (region-based FX and logistics) ---
+%%%
+%%%   region(Supplier, Region).                       % optional
+%%%       Supplier's geographic region (an atom, e.g. china, eu, local).
+%%%
+%%%   fx_rate(Region, Pct).                           % optional
+%%%       Exchange-rate multiplier as an integer percentage:
+%%%       105 = +5%, 100 = neutral, 95 = -5%. Absent => 100.
+%%%
+%%%   logistics_cost(Region, PerUnit).                % optional
+%%%       Freight/customs per unit added after FX. Absent => 0.
+%%%
+%%%   Landed unit cost = InvoicePrice * Pct // 100 + PerUnit
+%%%   applied before noncost_adjustment/2. The solver optimizes on
+%%%   total cost to YOUR dock, not invoice price.
 
 % --- Parts and demand --------------------------------------------------------
 
@@ -143,3 +198,34 @@ max_suppliers(part2, 2).             % part2 at most 2 suppliers
 %   No supplier may exceed Pct% of total demand across all parts.
 
 max_global_share(supplier2, 40).     % supplier2 capped at 40% of total volume
+
+% --- Rebates (portfolio-level volume discounts) --------------------------------
+%   If total volume across all parts exceeds Threshold, get DiscountPct% off
+%   the ENTIRE supplier spend (retrospective, cross-part).
+
+rebate(supplier2, 150, 5).          % supplier2: 5% off if total volume >= 150
+
+% --- Qualification data (no gates active in the demo — informational) --------
+%   Uncomment a gate to see hard disqualification in action.
+
+otif(supplier1, 98).
+otif(supplier2, 93).
+otif(supplier3, 96).
+
+lead_time(supplier1, part1, 21).
+lead_time(supplier2, part1, 35).
+lead_time(supplier3, part1, 14).
+
+certification(supplier1, iso9001).
+certification(supplier3, iso9001).
+
+% min_otif(95).                     % would disqualify supplier2 everywhere
+% max_lead_time(part1, 30).         % would disqualify supplier2 from part1
+% required_certification(iso9001).  % would disqualify supplier2 everywhere
+
+% --- Landed cost (regions inactive in the demo — uncomment to activate) ------
+
+% region(supplier1, apac).
+% region(supplier2, eu).
+% fx_rate(eu, 105).                 % +5% FX on eu suppliers
+% logistics_cost(apac, 3).          % $3/unit freight from apac

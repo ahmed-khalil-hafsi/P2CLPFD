@@ -169,36 +169,60 @@ This answers the questions your stakeholders actually ask: *"What if we drop
 the dual-source rule?"* → saves 5,792. *"What if supplier2 raises prices?"* →
 costs 75 more. The numbers are exact because the solver is exact.
 
-## Getting started
+## The judgment layer
 
-### Python
+The solver answers *"what is the cheapest legal award?"*. That is a mathematical
+fact, and it is never wrong. But it is not the question a buyer actually has.
 
-```python
-from p2clpfd import Solver
+A bare number can't tell you whether the data was fit to decide on, whether you
+are about to hand one supplier 76% of your spend, or which of a dozen constraints
+is the one worth a phone call. So P2CLPFD reads its own output:
 
-s = Solver()
-s.load_csv("quotes.csv")
-result = s.solve()
-print(f"Optimal TCO: {result['tco']}")
-
-for alloc in result["allocations"]:
-    for sup in alloc["suppliers"]:
-        print(f"  {alloc['part']} -> {sup['supplier']}: {sup['qty']} units")
+```bash
+p2clpfd advise quotes.csv
 ```
+
+```
+Verdict
+=======
+The cheapest legal award costs 19,534. Before signing: spend is concentrated —
+supplier3 would hold 75.9% of it (14,830), which is a lot of leverage to give
+one supplier.
+
+What to look at
+===============
+ ! Spend is concentrated — supplier3 would hold 75.9% of it (14,830), which is
+   a lot of leverage to give one supplier.
+   Loosening the share cap on supplier2 to 41 would save 128 (0.7% of total
+   cost) — this is where negotiation pays.
+```
+
+Every finding carries a severity, the numbers behind it, and a sentence written
+for a buyer rather than a solver. It will tell you when a constraint is *not*
+worth negotiating, and when a model is infeasible it names the rule to relax
+instead of just reporting failure.
+
+## Getting started
 
 ### Command line
 
 ```bash
-swipl -q -g run -g halt main.pl
+p2clpfd advise quotes.csv          # award + what to do about it
+p2clpfd solve quotes.csv           # just the cheapest legal award
+p2clpfd validate quotes.csv        # is this data fit to decide on?
+p2clpfd sensitivity quotes.csv     # where should I negotiate?
+p2clpfd multiperiod quotes.csv     # allocate across periods
+p2clpfd scenarios quotes.csv --scenario no_cap:'[{"remove":"dual_source(part1)"}]'
+```
+
+Every command takes `--json` for scripting, and exit codes are meaningful
+(`0` success, `1` no feasible award or validation error, `2` bad input):
+
+```bash
+p2clpfd solve quotes.csv --json | jq .tco
 ```
 
 ### MCP server (Claude Desktop, Cursor, agents)
-
-```bash
-p2clpfd-mcp
-```
-
-Add to Claude Desktop config:
 
 ```json
 {
@@ -208,8 +232,34 @@ Add to Claude Desktop config:
 }
 ```
 
-The agent can then call `solve_allocation`, `compare_scenarios`, and
-`validate_data` as native tools — no swipl or CLI knowledge needed.
+Eight tools, no swipl or CLI knowledge needed:
+
+| Tool | Answers |
+|---|---|
+| `get_advice` | *What should I do?* — start here |
+| `solve_allocation` | *What is the cheapest legal award?* |
+| `validate_data` | *Is this data fit to decide on?* |
+| `analyze_sensitivity` | *Where should I negotiate?* |
+| `compare_scenarios` | *What if?* |
+| `solve_multiperiod` | *How do I phase this across quarters?* |
+| `list_disqualified` | *Why isn't supplier X in the award?* |
+| `solve_trace` | *How did the solver get there?* |
+
+### Python
+
+```python
+from p2clpfd import Solver
+
+s = Solver()
+s.load_csv("quotes.csv")
+
+result = s.solve()
+print(f"Optimal TCO: {result['tco']}")
+
+advice = s.advise()          # verdict + ranked findings
+for finding in advice["findings"]:
+    print(finding["severity"], finding["say_to_user"])
+```
 
 ### HTTP API (for agents and integrations)
 
@@ -245,17 +295,63 @@ cells mean "no constraint" (unlimited / 0 / unrestricted).
 
 Suppliers are auto-discovered from the data — no separate declaration needed.
 
+### Qualification gates
+
+These **disqualify** rather than penalise: a supplier that fails is removed
+before price is considered, and no cost advantage can buy their way back in.
+Missing performance data also disqualifies — an unknown record is not a passing
+record.
+
+| Column | Description |
+|---|---|
+| `otif` | Supplier's on-time-in-full delivery % |
+| `min_otif` | Global gate: below this, disqualified everywhere |
+| `lead_time` | Quoted lead time for this part+supplier (days) |
+| `max_lead_time` | Per-part gate on lead time |
+| `certifications` | Supplier's certs, semicolon-separated (`iso9001;iatf16949`) |
+| `required_certs` | Per-part required certs, semicolon-separated |
+
+### Landed cost, rebates, routes, periods
+
+| Column | Description |
+|---|---|
+| `region` | Supplier's region (`apac`, `eu`, `local`, …) |
+| `fx_rate` | FX multiplier as integer % for that region (`105` = +5%) |
+| `logistics_cost` | Per-unit freight/customs for that region |
+| `rebate_threshold` | Units across all parts needed to earn a rebate |
+| `rebate_pct` | % off that supplier's **entire** spend once earned |
+| `route` | Group name for a shared corridor (`hormuz`, `atlantic`, …) |
+| `route_capacity` | Ceiling on that route's **combined** volume |
+| `route_share_cap` | That route's combined volume as a max % of demand |
+| `period` | Period number; `demand`/`capacity` then apply to that period |
+| `holding_cost` | Per-unit-per-period cost of carrying inventory |
+
+Landed unit cost is `invoice × fx ÷ 100 + logistics`, so the solver optimizes
+cost **to your dock**, not invoice price. A route caps a *set* of suppliers at
+once — the thing a shipping chokepoint or a single border crossing actually is,
+which no per-supplier cap can express.
+
 ## Validation
 
-P2CLPFD checks your data before solving:
+P2CLPFD checks your data before solving, and says what it found in plain
+language rather than solver jargon:
 
-```python
-s.validate()
-# ✓ tier coverage continuous
-# ✓ MOQ ≤ capacity
-# ✓ every priced part has demand
-# ✓ share bounds in [0, 100]
+```bash
+p2clpfd validate quotes.csv
 ```
+
+```
+Validation — Do not trust a result from this data until it is fixed.
+  [error] Supplier alpha requires a minimum order of 80 on widget but can only
+          make 50, so they can never be used.
+  [error] Qualified suppliers for widget can supply 80 units in total but 100
+          are needed.
+```
+
+Checks cover price-break gaps, MOQ above capacity, missing prices or demand,
+share bounds that cannot sum to demand, capacity below demand, and suppliers
+removed by qualification gates. Status is `error` (the answer would be wrong or
+impossible), `warning` (looks unintended), or `ok`.
 
 ## Documentation
 

@@ -6,7 +6,7 @@ Uses janus-swi to embed SWI-Prolog in-process for zero-overhead calls.
 
 from __future__ import annotations
 
-import os
+import os.path
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,7 +22,8 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    for name in ["facts", "solver", "csv_loader", "scenarios", "json_api"]:
+    for name in ["facts", "solver", "csv_loader", "decompose", "scenarios",
+                 "sensitivity", "multiperiod", "json_api", "tracer"]:
         janus.consult(str(_PL_DIR / f"{name}.pl"))
     _LOADED = True
 
@@ -52,6 +53,30 @@ def _scenarios_to_prolog(scenarios: list[dict]) -> str:
         overrides = _overrides_to_prolog(sc.get("overrides", []))
         parts.append(f"{name}-{overrides}")
     return "[" + ",".join(parts) + "]"
+
+
+#: Fields that carry Prolog's `null` atom when they do not apply — a
+#: constraint on a whole supplier has no part, and vice versa.
+_NULLABLE_FIELDS = ("supplier", "part")
+
+
+def _nulls_to_none(value: Any) -> Any:
+    """
+    Turn Prolog's `null` atom into a real None.
+
+    janus hands atoms across as strings, so an inapplicable field arrives
+    as the string "null" — which an agent would happily quote as a
+    supplier called "null". Normalise at the boundary rather than making
+    every caller remember the quirk.
+    """
+    if isinstance(value, dict):
+        return {
+            k: (None if k in _NULLABLE_FIELDS and v == "null" else _nulls_to_none(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_nulls_to_none(v) for v in value]
+    return value
 
 
 class Solver:
@@ -97,11 +122,26 @@ class Solver:
                 share_min, share_max, noncost_adj, fixed_cost,
                 min_suppliers, max_suppliers, dual_source,
                 global_capacity, global_share_cap
+
+        Raises:
+            FileNotFoundError: the path does not exist.
+            ValueError: the file exists but could not be parsed.
+
+        A failed load MUST raise rather than return. The Prolog side ships
+        demo facts in facts.pl, so a silent failure would leave those
+        loaded and every later answer would describe the wrong data.
         """
-        janus.query_once(
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"no such CSV file: {path}")
+
+        result = janus.query_once(
             'with_output_to(string(_), load_csv(Path))',
             {'Path': path}
         )
+        # janus reports goal failure via a falsy result or truth=False
+        # depending on version; treat either as a failed load.
+        if result is None or result.get("truth") is False:
+            raise ValueError(f"could not parse {path} as procurement CSV")
         return {"status": "ok", "path": path}
 
     def solve(self, max_cost: Optional[int] = None) -> Optional[dict]:
@@ -171,16 +211,132 @@ class Solver:
         """
         Validate the currently loaded facts for common issues.
 
-        Checks:
-            - Tier coverage (gaps, overlaps)
-            - MOQ > capacity
-            - Missing demand or cost facts
-            - Share range validity
+        Checks tier coverage, MOQ vs capacity, missing demand/cost,
+        share range validity, shares that cannot sum to demand,
+        capacity below demand, and qualification-gate exclusions.
 
         Returns:
-            Dict with "status" and any warnings.
+            Dict with:
+                - "status": "error" (unsolvable or wrong), "warning"
+                  (suspicious), or "ok"
+                - "issue_count": int
+                - "issues": [{severity, message, detail}, ...] where
+                  message is plain language safe to show a buyer.
         """
-        janus.query_once(
-            'with_output_to(string(_), validate_facts)'
+        result = janus.query_once('validate_to_json(JSON)')
+        return result.get("JSON", {"status": "error", "issues": []})
+
+    def solve_multiperiod(self) -> Optional[dict]:
+        """
+        Solve across periods with inventory carryover.
+
+        Requires period_demand facts (CSV columns period/period_demand).
+        The plan may buy ahead of demand when a later period's capacity
+        binds and holding cost is cheaper than the shortfall.
+
+        Returns:
+            Dict with "tco" and "plan" (a list of
+            {part, period, suppliers, end_inventory}), or None when no
+            feasible plan exists.
+        """
+        result = janus.query_once('solve_multiperiod_to_json(JSON)')
+        json = result.get("JSON")
+        if json and json.get("status") == "ok":
+            return json
+        return None
+
+    def sensitivity(self, step: int = 1) -> dict:
+        """
+        Find binding constraints and their shadow prices.
+
+        A binding constraint is one the optimal allocation sits exactly
+        against — it is actively shaping the award. Its shadow price is
+        the TCO saving from relaxing it one step.
+
+        Args:
+            step: Relaxation size for quantity constraints (capacity,
+                  global capacity, MOQ). Percentage and supplier-count
+                  constraints always relax by 1.
+
+        Returns:
+            Dict with:
+                - "status": "ok" or "infeasible"
+                - "tco": Baseline optimal TCO
+                - "binding_constraints": [{constraint, supplier, part,
+                                           used, limit}, ...]
+                - "negotiation_levers": [{constraint, supplier, part,
+                                          relaxed_limit, new_tco,
+                                          savings}, ...] sorted by
+                  savings, largest first.
+        """
+        result = janus.query_once(
+            'sensitivity_to_json(Step, JSON)',
+            {'Step': step}
         )
-        return {"status": "ok"}
+        return _nulls_to_none(result.get("JSON", {"status": "error"}))
+
+    def disqualified(self) -> list:
+        """
+        List (part, supplier) pairs excluded by qualification gates
+        (OTIF, lead time, certifications), with reasons.
+        """
+        result = janus.query_once('disqualified_to_json(JSON)')
+        return result.get("JSON", [])
+
+    def rebates(self) -> list:
+        """Portfolio rebates in effect: [{supplier, threshold, pct}, ...]."""
+        result = janus.query_once('rebates_to_json(JSON)')
+        return result.get("JSON", [])
+
+    def advise(self, sensitivity_step: int = 1) -> dict:
+        """
+        Solve, then interpret the result for a decision-maker.
+
+        Runs the full pipeline — validate, solve, sensitivity, gates —
+        and passes it through the judgment layer, which returns a
+        one-line verdict plus ranked findings written in plain
+        procurement language.
+
+        This is the entry point an agent should reach for first: it
+        answers "what should I do?" rather than "what is the optimum?".
+
+        Args:
+            sensitivity_step: Relaxation size for quantity constraints
+                when computing shadow prices.
+
+        Returns:
+            Dict with "verdict", "findings", and "tco". See
+            p2clpfd.judgment.advise for the finding schema.
+        """
+        from .judgment import advise as _advise
+
+        validation = self.validate()
+        solution = self.solve()
+        sensitivity = self.sensitivity(sensitivity_step) if solution else None
+        return _advise(
+            solution=solution,
+            validation=validation,
+            sensitivity=sensitivity,
+            disqualified=self.disqualified(),
+            rebates=self.rebates(),
+        )
+
+    def solve_trace(self, max_cost: Optional[int] = None) -> dict:
+        """
+        Solve and return the full solver trace as NDJSON lines.
+
+        The trace shows domain narrowing and the final optimal allocation.
+        Returns a dict with "trace" (string) and "tco" (int or None).
+        """
+        if max_cost is not None:
+            result = janus.query_once(
+                'solve_with_trace_captured(MaxCost, Trace, TCO)',
+                {'MaxCost': max_cost}
+            )
+        else:
+            result = janus.query_once(
+                'solve_with_trace_captured(Trace, TCO)'
+            )
+        tco = result.get("TCO")
+        trace = result.get("Trace", "")
+        return {"trace": trace, "tco": tco}

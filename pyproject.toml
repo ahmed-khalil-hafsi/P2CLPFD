@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
+p2clpfd = "p2clpfd.cli:main"
 p2clpfd-mcp = "p2clpfd.mcp:serve"
 
 [project.urls]

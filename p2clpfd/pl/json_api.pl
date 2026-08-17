@@ -4,7 +4,10 @@
 %%% can call it over HTTP.
 %%%
 %%% Start the server:
-%%%   swipl -g "server(8080)" -g halt main.pl json_api.pl
+%%%   swipl -g "['main.pl','tracer.pl','json_api.pl'], server(8080), thread_get_message(_)" &
+%%%
+%%% Then open http://localhost:8080/trace in a browser for the live
+%%% solver visualization (WebSocket).
 %%%
 %%% Endpoints:
 %%%
@@ -34,19 +37,26 @@
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
 :- use_module(library(http/http_client)).
+:- use_module(library(http/websocket)).
+:- use_module(library(thread)).
 
 %% ------------------------------------------------------------------ %%
 %%  HTTP SERVER                                                        %%
 %% ------------------------------------------------------------------ %%
 
-:- http_handler('/solve',      handle_solve,      [method(post)]).
-:- http_handler('/scenarios',   handle_scenarios,  [method(post)]).
-:- http_handler('/validate',    handle_validate,   [method(post)]).
-:- http_handler('/health',      handle_health,     [method(get)]).
+:- http_handler('/solve/trace',  handle_trace_ws,     []).
+:- http_handler('/solve',        handle_solve,        [method(post)]).
+:- http_handler('/trace',        serve_trace_html,    [method(get)]).
+:- http_handler('/scenarios',    handle_scenarios,    [method(post)]).
+:- http_handler('/validate',     handle_validate,     [method(post)]).
+:- http_handler('/health',       handle_health,       [method(get)]).
 
 %! server(+Port) is det.
 server(Port) :-
     format('P2CLPFD server on port ~w~n', [Port]),
+    format('  API:    http://localhost:~w/solve~n', [Port]),
+    format('  Trace:  http://localhost:~w/trace~n', [Port]),
+    format('  Health: http://localhost:~w/health~n', [Port]),
     http_server(http_dispatch, [port(Port)]).
 
 %% ------------------------------------------------------------------ %%
@@ -96,11 +106,157 @@ handle_validate(Request) :-
     http_read_json_dict(Request, JSON),
     (   is_dict(JSON), get_dict(csv_path, JSON, Path)
     ->  with_output_to(string(_), load_csv(Path)),
-        with_output_to(string(_), validate_facts),
-        Response = _{status:ok, warnings:[]}
+        validate_to_json(Response)
     ;   Response = _{status:error, message:"csv_path required"}
     ),
     reply_json_dict(Response).
+
+%% ------------------------------------------------------------------ %%
+%%  /solve/trace  (WebSocket — real-time solver visualization)        %%
+%% ------------------------------------------------------------------ %%
+
+handle_trace_ws(Request) :-
+    (   member(search(Params), Request)
+    ->  (   memberchk('csv_path'=Path, Params)
+        ->  true
+        ;   Path = 'sample.csv'
+        ),
+        (   memberchk('max_cost'=MaxCostStr, Params)
+        ->  atom_number(MaxCostStr, MaxCost)
+        ;   MaxCost = -1
+        )
+    ;   Path = 'sample.csv',
+        MaxCost = -1
+    ),
+    http_upgrade_to_websocket(
+        trace_ws_session(Path, MaxCost),
+        [],
+        Request).
+
+trace_ws_session(Path, MaxCost, WebSocket) :-
+    send_ws(WebSocket, _{event:"connected", csv_path:Path}),
+    catch(
+        (   with_output_to(string(_), load_csv(Path)),
+            (   MaxCost >= 0
+            ->  solve_with_trace_ws(WebSocket, MaxCost)
+            ;   solve_with_trace_ws(WebSocket)
+            )
+        ),
+        Error,
+        (   send_ws(WebSocket, _{event:"error",
+                                message:Error})
+        )).
+
+%! solve_with_trace_ws(+WebSocket) is nondet.
+%  Mirrors tracer.pl's solve_with_trace but sends events via WebSocket.
+%
+solve_with_trace_ws(WebSocket) :-
+    parts(Parts),
+    suppliers(Suppliers),
+    build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
+
+    send_ws_domains(WebSocket, RawAlloc, "initial"),
+    send_ws(WebSocket, _{event:"phase", phase:"searching"}),
+
+    (   labeling([min(TCO), ff], Vars)
+    ->  materialize(RawAlloc, Allocation),
+        send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
+        send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
+        send_ws(WebSocket, _{event:"optimal", tco:TCO}),
+        allocation_to_ws(Allocation, TCO, WebSocket)
+    ;   send_ws(WebSocket, _{event:"infeasible"})
+    ).
+
+%! solve_with_trace_ws(+WebSocket, +MaxCost) is nondet.
+%
+solve_with_trace_ws(WebSocket, MaxCost) :-
+    parts(Parts),
+    suppliers(Suppliers),
+    build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
+    TCO #=< MaxCost,
+
+    send_ws_domains(WebSocket, RawAlloc, "initial"),
+    send_ws(WebSocket, _{event:"phase", phase:"searching"}),
+
+    (   labeling([min(TCO), ff], Vars)
+    ->  materialize(RawAlloc, Allocation),
+        send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
+        send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
+        send_ws(WebSocket, _{event:"optimal", tco:TCO}),
+        allocation_to_ws(Allocation, TCO, WebSocket)
+    ;   send_ws(WebSocket, _{event:"infeasible"})
+    ).
+
+%! send_ws_domains(+WebSocket, +RawAlloc, +Phase) is det.
+%
+send_ws_domains(WebSocket, RawAlloc, Phase) :-
+    findall(D,
+            ( member(alloc(Part, Qs), RawAlloc),
+              member(q(Supplier, Q, _), Qs),
+              var(Q),
+              atom_string(Supplier, SStr),
+              atom_string(Part, PStr),
+              string_concat("q.", SStr, T1),
+              string_concat(T1, ".", T2),
+              string_concat(T2, PStr, QName),
+              fd_dom(Q, Dom),
+              dom_to_list(Dom, List),
+              D = _{name:QName, domain:List}
+            ),
+            Vars),
+    send_ws(WebSocket, _{event:"domain_snapshot", phase:Phase, vars:Vars}).
+
+%! send_ws_domains_ground(+WebSocket, +Allocation, +TCO, +Phase) is det.
+%
+send_ws_domains_ground(WebSocket, Allocation, TCO, Phase) :-
+    findall(D,
+            ( member(alloc(Part, Qs), Allocation),
+              member(q(Supplier, Q), Qs),
+              Q > 0,
+              atom_string(Supplier, SStr),
+              atom_string(Part, PStr),
+              string_concat("q.", SStr, T1),
+              string_concat(T1, ".", T2),
+              string_concat(T2, PStr, QName),
+              D = _{name:QName, domain:[Q]}
+            ),
+            QVars),
+    send_ws(WebSocket, _{event:"domain_snapshot", phase:Phase,
+                         vars:QVars, tco:TCO}).
+
+%! allocation_to_ws(+Allocation, +TCO, +WebSocket) is det.
+%
+allocation_to_ws(Allocation, TCO, WebSocket) :-
+    findall(PartJSON,
+            ( member(alloc(Part, Qs), Allocation),
+              findall(SupplierJSON,
+                      ( member(q(Supplier, Q), Qs),
+                        Q > 0,
+                        SupplierJSON = _{supplier:Supplier, qty:Q}
+                      ),
+                      SuppliersJSON),
+              PartJSON = _{part:Part, suppliers:SuppliersJSON}
+            ),
+            PartList),
+    send_ws(WebSocket, _{event:"allocation", allocation:PartList, tco:TCO}).
+
+%! send_ws(+WebSocket, +Dict) is det.
+%
+send_ws(WebSocket, Dict) :-
+    with_output_to(string(Msg), json_write(current_output, Dict)),
+    ws_send(WebSocket, text(Msg)).
+
+%! close_ws(+WebSocket) is det.
+%
+close_ws(WebSocket) :-
+    ws_close(WebSocket).
+
+%% ------------------------------------------------------------------ %%
+%%  /trace  (HTML visualization page)                                 %%
+%% ------------------------------------------------------------------ %%
+
+serve_trace_html(_Request) :-
+    http_reply_file('trace.html', [], [unsafe(true)]).
 
 %% ------------------------------------------------------------------ %%
 %%  /health                                                            %%
@@ -195,6 +351,50 @@ json_override_to_prolog(JSON, Override) :-
 %% ------------------------------------------------------------------ %%
 %%  STANDALONE JSON (no HTTP)                                          %%
 %% ------------------------------------------------------------------ %%
+
+%! validate_to_json(-JSON) is det.
+%  Structured validation findings. `status` is "error" when any issue
+%  would make the model unsolvable or wrong, "warning" for suspicious
+%  data, "ok" when clean.
+validate_to_json(JSON) :-
+    validation_issues(Issues),
+    findall(_{severity:SevStr, message:Msg, detail:DetailStr},
+            ( member(Issue, Issues),
+              issue_severity(Issue, Sev),
+              atom_string(Sev, SevStr),
+              issue_message(Issue, MsgAtom),
+              atom_string(MsgAtom, Msg),
+              term_string(Issue, DetailStr)
+            ),
+            Findings),
+    overall_validation_status(Issues, Status),
+    length(Findings, N),
+    JSON = _{status:Status, issue_count:N, issues:Findings}.
+
+overall_validation_status(Issues, Status) :-
+    (   member(I, Issues), issue_severity(I, error)
+    ->  Status = "error"
+    ;   member(I, Issues), issue_severity(I, warning)
+    ->  Status = "warning"
+    ;   Status = "ok"
+    ).
+
+%! rebates_to_json(-JSON) is det.
+%  Portfolio rebates currently in effect.
+rebates_to_json(JSON) :-
+    findall(_{supplier:S, threshold:T, pct:P},
+            rebate(S, T, P),
+            JSON).
+
+%! disqualified_to_json(-JSON) is det.
+%  Excluded (part, supplier) pairs with reasons, as JSON dicts.
+disqualified_to_json(JSON) :-
+    disqualified_pairs(Exclusions),
+    findall(_{part:P, supplier:S, reasons:RStrs},
+            ( member(excluded(P, S, Rs), Exclusions),
+              findall(RStr, (member(R, Rs), term_string(R, RStr)), RStrs)
+            ),
+            JSON).
 
 %! solve_to_json(-JSON) is det.
 %  Solve using already-loaded facts, return JSON dict.

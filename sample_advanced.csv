@@ -1,0 +1,7 @@
+part,supplier,demand,unit_cost,capacity,moq,share_min,share_max,noncost_adj,fixed_cost,min_suppliers,max_suppliers,dual_source,global_capacity,global_share_cap,otif,min_otif,lead_time,max_lead_time,certifications,required_certs,region,fx_rate,logistics_cost,rebate_threshold,rebate_pct
+housing,acme,400,100,300,,0,60,0,,2,,1,2000,,98,90,21,45,iso9001;iatf16949,iso9001,eu,105,2,,
+housing,borex,400,82,250,50,0,60,4,,,,,2000,,94,,38,,iso9001,,apac,100,7,600,4
+housing,cedar,400,95,400,,0,100,-3,,,,,2000,,96,,15,,iso9001;iatf16949,,local,100,0,,
+bracket,acme,350,44,400,,,,0,,2,,,2000,,98,,25,40,iso9001;iatf16949,iso9001,eu,105,2,,
+bracket,borex,350,36,200,40,,,4,,,,,2000,,94,,30,,iso9001,,apac,100,7,600,4
+bracket,cedar,350,41,350,,,,-3,,,,,2000,,96,,18,,iso9001;iatf16949,,local,100,0,,

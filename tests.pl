@@ -59,7 +59,10 @@ clear :-
     retractall(required_certification(_,_)),
     retractall(region(_,_)),
     retractall(fx_rate(_,_)),
-    retractall(logistics_cost(_,_)).
+    retractall(logistics_cost(_,_)),
+    retractall(supplier_route(_,_)),
+    retractall(route_capacity(_,_)),
+    retractall(max_route_share(_,_)).
 
 setup_minimal :-
     clear,
@@ -239,6 +242,196 @@ test(infeasible_when_global_caps_below_demand, [fail]) :-
     solve(_, _).
 
 :- end_tests(global_capacity).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(rebates).
+
+% b is dearer per unit but offers a portfolio rebate across both parts.
+setup_rebate :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 100)),
+    assert(user:cost(a, p1, 90)),
+    assert(user:cost(b, p1, 100)),
+    assert(user:cost(a, p2, 90)),
+    assert(user:cost(b, p2, 100)).
+
+test(reachable_rebate_is_applied) :-
+    setup_rebate,
+    assert(user:rebate(b, 200, 50)),     % half price once b wins everything
+    solve(A, TCO), !,
+    supplier_total(b, A, 200),           % worth concentrating on b
+    TCO =:= 10000.                       % 200*100 = 20000, less 50%
+
+test(unreachable_rebate_is_not_applied) :-
+    setup_rebate,
+    assert(user:capacity(b, p1, 30)),
+    assert(user:capacity(b, p2, 30)),
+    assert(user:rebate(b, 200, 50)),     % b can ship at most 60, never 200
+    solve(_, TCO), !,
+    TCO =:= 18000.                       % all 200 units from a @90, no discount
+
+% Regression: build_rebates/4 failing was read as "no rebates exist", so
+% an unreachable forced branch silently dropped the threshold constraint
+% and the solver reported a discount it could never earn.
+test(unreachable_rebate_does_not_fake_a_discount) :-
+    setup_rebate,
+    assert(user:capacity(b, p1, 30)),
+    assert(user:capacity(b, p2, 30)),
+    assert(user:rebate(b, 200, 50)),
+    solve(A, TCO), !,
+    supplier_total(b, A, BTotal),
+    BTotal < 200,                        % threshold genuinely unmet
+    TCO > 10000.                         % so no discounted price is claimed
+
+test(rebate_worth_less_than_the_premium_is_declined) :-
+    setup_rebate,
+    assert(user:rebate(b, 200, 2)),      % 2% off does not cover b's premium
+    solve(A, TCO), !,
+    supplier_total(a, A, 200),
+    TCO =:= 18000.
+
+:- end_tests(rebates).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(decomposition).
+
+% Independent parts must give the same answer as one joint model.
+test(decomposed_matches_monolithic) :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 80)),
+    assert(user:cost(a, p1, 100)), assert(user:cost(b, p1, 82)),
+    assert(user:cost(a, p2, 70)),  assert(user:cost(b, p2, 95)),
+    assert(user:capacity(a, p1, 75)), assert(user:capacity(b, p1, 75)),
+    assert(user:capacity(a, p2, 60)), assert(user:capacity(b, p2, 60)),
+    assert(user:dual_source(p1)),
+    \+ parts_are_coupled,                % precondition: separable
+    solve(_, TCO),
+    solve_monolithic(_, MonoTCO), !,
+    TCO =:= MonoTCO.
+
+test(global_share_cap_forces_monolithic) :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 100)),
+    assert(user:cost(a, p1, 10)), assert(user:cost(b, p1, 20)),
+    assert(user:cost(a, p2, 10)), assert(user:cost(b, p2, 20)),
+    assert(user:max_global_share(a, 50)),
+    parts_are_coupled,                   % cap spans parts
+    solve(A, _), !,
+    supplier_total(a, A, ATotal),
+    ATotal =< 100.                       % 50% of 200
+
+test(slack_global_capacity_stays_separable) :-
+    user:clear,
+    assert(user:demand(p1, 50)),
+    assert(user:demand(p2, 50)),
+    assert(user:cost(a, p1, 10)), assert(user:cost(b, p1, 20)),
+    assert(user:cost(a, p2, 10)), assert(user:cost(b, p2, 20)),
+    assert(user:global_capacity(a, 5000)),   % far above total demand
+    \+ parts_are_coupled,
+    solve(_, TCO), !,
+    TCO =:= 1000.
+
+:- end_tests(decomposition).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(routes).
+
+% Two cheap suppliers share one shipping corridor; a third is dearer but
+% off-corridor. The route ceiling caps the pair's COMBINED volume, which
+% no per-supplier cap can express.
+setup_routes :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(cheap_a, part1, 10)),
+    assert(user:cost(cheap_b, part1, 10)),
+    assert(user:cost(offroute, part1, 25)),
+    assert(user:supplier_route(cheap_a, hormuz)),
+    assert(user:supplier_route(cheap_b, hormuz)).
+
+route_total(Allocation, Route, Total) :-
+    findall(Q,
+            ( member(alloc(_, Qs), Allocation),
+              member(q(S, Q), Qs),
+              user:supplier_route(S, Route)
+            ),
+            Volumes),
+    sum_list(Volumes, Total).
+
+test(route_capacity_caps_the_group) :-
+    setup_routes,
+    assert(user:route_capacity(hormuz, 60)),
+    solve(A, TCO), !,
+    route_total(A, hormuz, Total),
+    Total =:= 60,                   % group ceiling, not per supplier
+    TCO =:= 1600.                   % 60@10 + 40@25
+
+test(route_share_cap_caps_the_group) :-
+    setup_routes,
+    assert(user:max_route_share(hormuz, 30)),
+    solve(A, TCO), !,
+    route_total(A, hormuz, Total),
+    Total =:= 30,
+    TCO =:= 2050.                   % 30@10 + 70@25
+
+test(no_route_facts_no_effect) :-
+    setup_routes,
+    solve(_, TCO), !,
+    TCO =:= 1000.                   % all 100 units from the cheap corridor
+
+test(route_binding_is_detected) :-
+    setup_routes,
+    assert(user:route_capacity(hormuz, 60)),
+    sensitivity(1, sensitivity(_, Bindings, _)),
+    member(binding(route_capacity(hormuz), 60, 60), Bindings).
+
+test(route_shadow_price) :-
+    setup_routes,
+    assert(user:route_capacity(hormuz, 60)),
+    sensitivity(10, sensitivity(1600, _, Shadows)),
+    % 10 more units through the corridor swaps 10 units of 25 for 10 of 10
+    member(shadow(route_capacity(hormuz), 70, 1450, 150), Shadows).
+
+% A route ceiling binds the SUM while every member stays under its own
+% limit — the case per-supplier global_capacity/2 cannot express.
+test(route_binds_sum_not_members) :-
+    setup_routes,
+    assert(user:global_capacity(cheap_a, 100)),   % neither member is
+    assert(user:global_capacity(cheap_b, 100)),   % individually binding
+    assert(user:route_capacity(hormuz, 60)),
+    solve(A, _), !,
+    route_total(A, hormuz, 60).
+
+% The ceiling applies across all parts, not per part.
+test(route_capacity_spans_parts) :-
+    user:clear,
+    assert(user:demand(part1, 50)),
+    assert(user:demand(part2, 50)),
+    assert(user:cost(onroute, part1, 10)),
+    assert(user:cost(onroute, part2, 10)),
+    assert(user:cost(offroute, part1, 25)),
+    assert(user:cost(offroute, part2, 25)),
+    assert(user:supplier_route(onroute, hormuz)),
+    assert(user:route_capacity(hormuz, 60)),      % 60 across BOTH parts
+    solve(A, TCO), !,
+    route_total(A, hormuz, 60),
+    TCO =:= 600 + 1000.                           % 60@10 + 40@25
+
+% A route closed below total demand with no alternative is infeasible.
+test(route_capacity_can_make_infeasible, [fail]) :-
+    user:clear,
+    assert(user:demand(part1, 100)),
+    assert(user:cost(onlysource, part1, 10)),
+    assert(user:supplier_route(onlysource, hormuz)),
+    assert(user:route_capacity(hormuz, 50)),
+    solve(_, _).
+
+:- end_tests(routes).
 
 %% ------------------------------------------------------------------ %%
 
@@ -450,6 +643,7 @@ test(no_region_unchanged) :-
 :- end_tests(landed_cost).
 
 %% ------------------------------------------------------------------ %%
+
 
 :- begin_tests(sensitivity).
 

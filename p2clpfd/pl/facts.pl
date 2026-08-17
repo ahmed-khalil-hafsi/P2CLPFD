@@ -19,6 +19,10 @@
 :- dynamic region/2.
 :- dynamic fx_rate/2.
 :- dynamic logistics_cost/2.
+:- dynamic rebate_forced/2.
+:- dynamic supplier_route/2.
+:- dynamic route_capacity/2.
+:- dynamic max_route_share/2.
 %%%
 %%% Schema (all quantities are absolute integers, not percentages):
 %%%

@@ -106,8 +106,7 @@ handle_validate(Request) :-
     http_read_json_dict(Request, JSON),
     (   is_dict(JSON), get_dict(csv_path, JSON, Path)
     ->  with_output_to(string(_), load_csv(Path)),
-        with_output_to(string(_), validate_facts),
-        Response = _{status:ok, warnings:[]}
+        validate_to_json(Response)
     ;   Response = _{status:error, message:"csv_path required"}
     ),
     reply_json_dict(Response).
@@ -352,6 +351,40 @@ json_override_to_prolog(JSON, Override) :-
 %% ------------------------------------------------------------------ %%
 %%  STANDALONE JSON (no HTTP)                                          %%
 %% ------------------------------------------------------------------ %%
+
+%! validate_to_json(-JSON) is det.
+%  Structured validation findings. `status` is "error" when any issue
+%  would make the model unsolvable or wrong, "warning" for suspicious
+%  data, "ok" when clean.
+validate_to_json(JSON) :-
+    validation_issues(Issues),
+    findall(_{severity:SevStr, message:Msg, detail:DetailStr},
+            ( member(Issue, Issues),
+              issue_severity(Issue, Sev),
+              atom_string(Sev, SevStr),
+              issue_message(Issue, MsgAtom),
+              atom_string(MsgAtom, Msg),
+              term_string(Issue, DetailStr)
+            ),
+            Findings),
+    overall_validation_status(Issues, Status),
+    length(Findings, N),
+    JSON = _{status:Status, issue_count:N, issues:Findings}.
+
+overall_validation_status(Issues, Status) :-
+    (   member(I, Issues), issue_severity(I, error)
+    ->  Status = "error"
+    ;   member(I, Issues), issue_severity(I, warning)
+    ->  Status = "warning"
+    ;   Status = "ok"
+    ).
+
+%! rebates_to_json(-JSON) is det.
+%  Portfolio rebates currently in effect.
+rebates_to_json(JSON) :-
+    findall(_{supplier:S, threshold:T, pct:P},
+            rebate(S, T, P),
+            JSON).
 
 %! disqualified_to_json(-JSON) is det.
 %  Excluded (part, supplier) pairs with reasons, as JSON dicts.

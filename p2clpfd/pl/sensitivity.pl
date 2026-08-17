@@ -74,6 +74,21 @@ binding_constraint(Allocation, binding(max_global_share(S), Total, Pct)) :-
     supplier_total_q(S, Allocation, Total),
     100 * (Total + 1) > Pct * TD.
 
+% Route capacity: the whole group sits exactly at its shared ceiling.
+binding_constraint(Allocation, binding(route_capacity(R), Total, Cap)) :-
+    route_capacity(R, Cap),
+    route_total_alloc(R, Allocation, Total),
+    Total > 0,
+    Total =:= Cap.
+
+% Route share cap: one more unit on this route would breach the percentage.
+binding_constraint(Allocation, binding(max_route_share(R), Total, Pct)) :-
+    max_route_share(R, Pct),
+    total_demand_from_alloc(Allocation, TD),
+    TD > 0,
+    route_total_alloc(R, Allocation, Total),
+    100 * (Total + 1) > Pct * TD.
+
 % Per-part share maximum.
 binding_constraint(Allocation, binding(share_max(P, S), Q, MaxPct)) :-
     share(P, S, _, MaxPct),
@@ -140,6 +155,11 @@ relaxation(capacity(S, P), Cap, Step, [set(capacity(S, P, NewCap))], NewCap) :-
 relaxation(global_capacity(S), Cap, Step, [set(global_capacity(S, NewCap))], NewCap) :-
     NewCap is Cap + Step.
 relaxation(max_global_share(S), Pct, _, [set(max_global_share(S, NewPct))], NewPct) :-
+    Pct < 100,
+    NewPct is Pct + 1.
+relaxation(route_capacity(R), Cap, Step, [set(route_capacity(R, NewCap))], NewCap) :-
+    NewCap is Cap + Step.
+relaxation(max_route_share(R), Pct, _, [set(max_route_share(R, NewPct))], NewPct) :-
     Pct < 100,
     NewPct is Pct + 1.
 relaxation(share_max(P, S), MaxPct, _, [set(share(P, S, MinPct, NewMax))], NewMax) :-

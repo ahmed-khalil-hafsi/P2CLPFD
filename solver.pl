@@ -24,9 +24,33 @@
 %  Backtracking yields subsequent solutions in increasing TCO order.
 %
 solve(Allocation, TCO) :-
+    (   rebate(_, _, _), \+ rebate_forced(_, _)
+    ->  solve_rebate_enumerated(Allocation, TCO)
+    ;   solve_dispatch(Allocation, TCO)
+    ).
+
+%! solve_dispatch(-Allocation, -TCO) is nondet.
+%  Pick the cheapest strategy that is still exact for this model.
+solve_dispatch(Allocation, TCO) :-
+    (   single_part_problem
+    ->  solve_monolithic(Allocation, TCO)
+    ;   parts_are_coupled
+    ->  solve_monolithic(Allocation, TCO)
+    ;   solve_decomposed(Allocation, TCO)
+    ).
+
+single_part_problem :-
+    parts(Parts),
+    Parts = [_].
+
+%! solve_monolithic(-Allocation, -TCO) is nondet.
+%  One model over every part at once. Used when cross-part constraints
+%  make the parts inseparable.
+solve_monolithic(Allocation, TCO) :-
     parts(Parts),
     suppliers(Suppliers),
     build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
+    post_tco_lower_bound(TCO),
     labeling([min(TCO), ff], Vars),
     materialize(RawAlloc, Allocation).
 
@@ -34,13 +58,13 @@ solve(Allocation, TCO) :-
 %
 %  As solve/2 but additionally constrains TCO =< MaxCost.
 %
+%  The cheapest award subject to a ceiling is just the cheapest award,
+%  provided it clears the ceiling — so this reuses solve/2 and inherits
+%  its decomposition and rebate enumeration instead of falling back to
+%  one large monolithic search.
 solve(Allocation, TCO, MaxCost) :-
-    parts(Parts),
-    suppliers(Suppliers),
-    build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
-    TCO #=< MaxCost,
-    labeling([min(TCO), ff], Vars),
-    materialize(RawAlloc, Allocation).
+    solve(Allocation, TCO),
+    TCO =< MaxCost.
 
 %% ------------------------------------------------------------------ %%
 %%  DATA ACCESSORS  (read from facts.pl)                                %%
@@ -206,10 +230,20 @@ build_model(Parts, Suppliers, RawAlloc, Vars, TCO) :-
     build_global_capacity(Suppliers, RawAlloc),
     post_risk_constraints(Parts, AllBs),
     post_global_share(RawAlloc, Parts),
-    (   build_rebates(Suppliers, RawAlloc, PartCosts, TCO)
-    ->  append(VarsParts, Vars)
+    post_route_constraints(RawAlloc, Parts),
+    append(VarsParts, BaseVars),
+    %% Test for rebates BEFORE calling build_rebates/4, never on whether
+    %% it succeeded. build_rebates/4 also fails when the rebate model is
+    %% genuinely infeasible (a forced branch that cannot be reached), and
+    %% treating that as "no rebates here" would silently drop the
+    %% threshold constraint and report a solution that never earns it.
+    (   rebate(_, _, _)
+    ->  %% Rebate control variables MUST join the labeling set. Left out,
+        %% TCO never grounds and min(TCO) cannot close its bound.
+        build_rebates(Suppliers, RawAlloc, TCO, RebateVars),
+        append(BaseVars, RebateVars, Vars)
     ;   sum(PartCosts, #=, TCO),
-        append(VarsParts, Vars)
+        Vars = BaseVars
     ).
 
 build_parts([], _, [], [], [], []).
@@ -443,20 +477,91 @@ post_weighted_sum([V|Vs], Coeff, Total) :-
     post_weighted_sum(Vs, Coeff, Rest).
 
 %% ------------------------------------------------------------------ %%
+%%  ROUTE (GROUP) CONSTRAINTS                                          %%
+%% ------------------------------------------------------------------ %%
+%
+%  A route is a named group of suppliers that share a physical or policy
+%  ceiling.  global_capacity/2 caps ONE supplier across all parts; a route
+%  caps a SET of suppliers across all parts.  This is what a shipping
+%  chokepoint, a shared port, a single border crossing, or a country-level
+%  policy limit actually is: no individual supplier is capped, but their
+%  sum is.
+%
+%    supplier_route(Supplier, Route).   % membership; a supplier has one route
+%    route_capacity(Route, MaxQty).     % absolute ceiling on the group total
+%    max_route_share(Route, Pct).       % group total =< Pct% of total demand
+%
+%  Both ceilings are optional and independent.
+
+%! routes(-Routes) is det.
+routes(Routes) :-
+    findall(R, supplier_route(_, R), Rs),
+    sort(Rs, Routes).
+
+%! route_members(+Route, -Members) is det.
+route_members(Route, Members) :-
+    findall(S, supplier_route(S, Route), Ss),
+    sort(Ss, Members).
+
+%! post_route_constraints(+RawAlloc, +Parts) is det.
+post_route_constraints(RawAlloc, Parts) :-
+    routes(Routes),
+    (   Routes == []
+    ->  true
+    ;   total_demand(Parts, TotalDemand),
+        post_route_list(Routes, RawAlloc, TotalDemand)
+    ).
+
+%% Direct recursion, NOT forall/2: forall/2 is double negation, so any
+%% CLP(FD) constraint posted inside it is undone on the way out.
+post_route_list([], _, _).
+post_route_list([Route|Rest], RawAlloc, TotalDemand) :-
+    route_qs(Route, RawAlloc, Qs),
+    (   Qs == []
+    ->  true
+    ;   route_capacity_constraint(Route, Qs),
+        route_share_constraint(Route, Qs, TotalDemand)
+    ),
+    post_route_list(Rest, RawAlloc, TotalDemand).
+
+route_capacity_constraint(Route, Qs) :-
+    (   route_capacity(Route, Cap)
+    ->  sum(Qs, #=<, Cap)
+    ;   true
+    ).
+
+route_share_constraint(Route, Qs, TotalDemand) :-
+    (   max_route_share(Route, Pct)
+    ->  post_weighted_sum(Qs, 100, Total),
+        Total #=< Pct * TotalDemand
+    ;   true
+    ).
+
+%! route_qs(+Route, +RawAlloc, -Qs) is det.
+%  Every Q variable belonging to any supplier in Route, across all parts.
+%  Collected by unification so the constraints reach the original vars.
+route_qs(Route, RawAlloc, Qs) :-
+    route_members(Route, Members),
+    member_qs(Members, RawAlloc, Qs).
+
+member_qs([], _, []).
+member_qs([S|Rest], RawAlloc, Out) :-
+    supplier_qs_across_parts(S, RawAlloc, SQs),
+    append(SQs, RestOut, Out),
+    member_qs(Rest, RawAlloc, RestOut).
+
+%% ------------------------------------------------------------------ %%
 %%  REBATES (portfolio-level volume discounts)                         %%
 %% ------------------------------------------------------------------ %%
 
-%! build_rebates(+Suppliers, +RawAlloc, +AllPartCosts, -RebateTCON).
-%  Computes the collection of (supplier rebated cost) terms to replace
-%  the per-part cost aggregation when rebates are active.
-build_rebates(_, _, _, _) :-
-    \+ rebate(_, _, _),
-    !, fail.   % no rebates → signal failure so build_model uses sum(PartCosts)
-
-build_rebates(Suppliers, RawAlloc, _PartCosts, TCO) :-
-    rebate(_, _, _),  % at least one rebate exists
-    !,
-    supplier_costs_across_all(Suppliers, RawAlloc, SupplierCosts, _),
+%! build_rebates(+Suppliers, +RawAlloc, -TCO, -RebateVars) is semidet.
+%  Aggregates TCO per supplier (so a cross-part rebate can apply to the
+%  whole spend) instead of per part. Only called when a rebate exists.
+%  Fails only when the rebate model is infeasible — which means the whole
+%  model is infeasible, so the caller must NOT treat failure as "skip".
+%  RebateVars are the control variables the caller must label.
+build_rebates(Suppliers, RawAlloc, TCO, RebateVars) :-
+    supplier_costs_across_all(Suppliers, RawAlloc, SupplierCosts, RebateVars),
     sum(SupplierCosts, #=, TCO).
 
 %! supplier_costs_across_all(+Suppliers, +RawAlloc, -Costs, -RebateVars).
@@ -475,15 +580,45 @@ supplier_final_cost(Supplier, RawAlloc, FinalCost, RebateVars) :-
     (   rebate(Supplier, Threshold, Pct)
     ->  supplier_qs_across_parts(Supplier, RawAlloc, Qs),
         sum(Qs, #=, TotalQ),
-        RebateActive in 0..1,
-        TotalQ #>= Threshold #<==> RebateActive #= 1,
-        CostDiscounted #= (TotalCost * (100 - Pct)) div 100,
-        RebateIdx #= RebateActive + 1,
-        element(RebateIdx, [TotalCost, CostDiscounted], FinalCost),
-        RebateVars = [RebateActive, RebateIdx]
+        rebate_branch(Supplier, Threshold, Pct, TotalQ, TotalCost,
+                      FinalCost, RebateVars)
     ;   FinalCost = TotalCost,
         RebateVars = []
     ).
+
+%! rebate_branch(+Supplier, +Threshold, +Pct, +TotalQ, +TotalCost,
+%!               -FinalCost, -RebateVars) is det.
+%
+%  A rebate is a step in the objective: below the threshold you pay list,
+%  at or above it the supplier's WHOLE spend is discounted. Expressing
+%  that with reification makes the cost non-linear, and branch-and-bound
+%  then struggles to prove optimality — the integer division propagates
+%  weakly over five-digit cost domains.
+%
+%  So the caller may instead fix the branch up front via rebate_forced/2
+%  and solve each side separately (see solve_rebate_enumerated/2). With
+%  the branch fixed the objective is linear again and the search is fast.
+%  The reified form is kept as the fallback for direct callers.
+%
+rebate_branch(Supplier, Threshold, Pct, TotalQ, TotalCost, FinalCost, []) :-
+    rebate_forced(Supplier, 1),
+    !,
+    TotalQ #>= Threshold,
+    FinalCost #= (TotalCost * (100 - Pct)) // 100.
+rebate_branch(Supplier, Threshold, _Pct, TotalQ, TotalCost, FinalCost, []) :-
+    rebate_forced(Supplier, 0),
+    !,
+    TotalQ #=< Threshold - 1,
+    FinalCost = TotalCost.
+rebate_branch(_Supplier, Threshold, Pct, TotalQ, TotalCost, FinalCost,
+              [RebateActive]) :-
+    RebateActive in 0..1,
+    TotalQ #>= Threshold #<==> RebateActive #= 1,
+    CostDiscounted #= (TotalCost * (100 - Pct)) // 100,
+    %% Reified selection rather than element/3: element/3 wants a list of
+    %% integers, and passing FD variables in it propagates poorly.
+    RebateActive #= 1 #==> FinalCost #= CostDiscounted,
+    RebateActive #= 0 #==> FinalCost #= TotalCost.
 
 %! supplier_costs_across_parts(+Supplier, +RawAlloc, -CostCs).
 %  Collects CostC variables for Supplier across all parts.
@@ -561,8 +696,45 @@ verify_allocation(Allocation, TCO) :-
     verify_global_capacity(Allocation),
     verify_risk(Allocation),
     verify_global_share(Allocation),
+    verify_routes(Allocation),
     verify_qualification(Allocation),
     verify_tco(Allocation, TCO).
+
+%! verify_routes(+Allocation) is det.
+%  Checks route_capacity/2 and max_route_share/2 on the materialized award.
+verify_routes(Allocation) :-
+    total_demand_from_alloc(Allocation, TotalDemand),
+    forall(( routes(Rs), member(Route, Rs) ),
+           verify_route(Route, Allocation, TotalDemand)).
+
+verify_route(Route, Allocation, TotalDemand) :-
+    route_total_alloc(Route, Allocation, Total),
+    (   route_capacity(Route, Cap)
+    ->  (   Total =< Cap
+        ->  true
+        ;   format('  !! ROUTE CAP VIOLATION: ~w total=~w > ~w~n',
+                   [Route, Total, Cap])
+        )
+    ;   true
+    ),
+    (   max_route_share(Route, Pct)
+    ->  (   Total * 100 =< Pct * TotalDemand
+        ->  true
+        ;   ActualPct is Total * 100 / TotalDemand,
+            format('  !! ROUTE SHARE VIOLATION: ~w at ~2f% > ~w%~n',
+                   [Route, ActualPct, Pct])
+        )
+    ;   true
+    ).
+
+route_total_alloc(Route, Allocation, Total) :-
+    findall(Q,
+            ( member(alloc(_, Qs), Allocation),
+              member(q(Supplier, Q), Qs),
+              supplier_route(Supplier, Route)
+            ),
+            RouteQs),
+    sum_list(RouteQs, Total).
 
 %! verify_qualification(+Allocation) is det.
 %  No disqualified supplier may hold a positive allocation.
@@ -756,133 +928,232 @@ supplier_qs_across_parts_alloc(Supplier, [alloc(_, Qs)|Rest], Out) :-
 
 %! validate_facts is det.
 %
-%  Runs all validation checks and reports issues.
-%  Returns true even if issues are found (use the output to diagnose).
+%  Prints all validation issues. Never fails — use the output (or
+%  validation_issues/1 for structured access) to diagnose.
 %
 validate_facts :-
     format('~n=== Fact Validation ===~n'),
-    validate_tiers,
-    validate_moq_capacity,
-    validate_demand_exists,
-    validate_cost_exists,
-    validate_share_ranges,
-    validate_qualification,
+    validation_issues(Issues),
+    (   Issues == []
+    ->  format('  No issues found.~n')
+    ;   forall(member(Issue, Issues),
+               ( issue_message(Issue, Msg),
+                 format('  !! ~w~n', [Msg]) ))
+    ),
     format('=== Validation Complete ===~n~n').
 
-%! validate_qualification is det.
-%  Warns when qualification gates disqualify EVERY supplier of a part —
-%  a guaranteed infeasibility.
-validate_qualification :-
+%! validation_issues(-Issues) is det.
+%  All data-quality issues in the currently loaded facts.
+validation_issues(Issues) :-
+    findall(I, validation_issue(I), Issues).
+
+%! validation_issue(-Issue) is nondet.
+%
+%  One clause per check. Each Issue is a term whose functor names the
+%  problem; issue_message/2 and issue_severity/2 interpret it. Keeping
+%  detection separate from reporting lets the CLI print it, the JSON API
+%  serialize it, and the judgment layer reason about it.
+
+% --- tiered pricing coverage ---
+validation_issue(tier_gap(S, P, ActualMin, ExpectedMin)) :-
+    tier_pair(S, P, Sorted),
+    tier_gap_in(Sorted, 0, ActualMin, ExpectedMin).
+validation_issue(tier_inverted(S, P, Min, Max)) :-
+    price_tier(S, P, Min, Max, _),
+    Max \== sup,
+    Max < Min.
+
+% --- MOQ vs capacity ---
+validation_issue(moq_over_capacity(S, P, Moq, Cap)) :-
+    moq(S, P, Moq),
+    capacity(S, P, Cap),
+    Moq > Cap.
+
+% --- missing facts ---
+validation_issue(missing_demand(P)) :-
+    costed_part(P),
+    \+ demand(P, _).
+validation_issue(missing_cost(S, P)) :-
+    constrained_pair(S, P),
+    \+ allocatable(P, S).
+
+% --- share ranges ---
+validation_issue(share_out_of_range(P, S, min, MinPct)) :-
+    share(P, S, MinPct, _),
+    ( MinPct < 0 ; MinPct > 100 ).
+validation_issue(share_out_of_range(P, S, max, MaxPct)) :-
+    share(P, S, _, MaxPct),
+    ( MaxPct < 0 ; MaxPct > 100 ).
+validation_issue(share_min_over_max(P, S, MinPct, MaxPct)) :-
+    share(P, S, MinPct, MaxPct),
+    MinPct > MaxPct.
+
+% --- share bounds that cannot sum to demand ---
+validation_issue(share_minimums_exceed_demand(P, TotalMinPct)) :-
+    demand(P, _),
+    findall(Min, ( share(P, S, Min, _), allocatable(P, S) ), Mins),
+    Mins \== [],
+    sum_list(Mins, TotalMinPct),
+    TotalMinPct > 100.
+validation_issue(share_maximums_below_demand(P, TotalMaxPct)) :-
+    demand(P, D),
+    D > 0,
+    findall(Max, ( allocatable(P, S), share_of(P, S, _, Max) ), Maxes),
+    Maxes \== [],
+    sum_list(Maxes, TotalMaxPct),
+    TotalMaxPct < 100.
+
+% --- capacity that cannot meet demand ---
+validation_issue(capacity_below_demand(P, TotalCap, Demand)) :-
+    demand(P, Demand),
+    Demand > 0,
+    findall(S, ( allocatable(P, S), qualified(P, S) ), Suppliers),
+    Suppliers \== [],
+    all_capped(Suppliers, P),
+    findall(C, ( member(S, Suppliers), capacity_of(S, P, C) ), Caps),
+    sum_list(Caps, TotalCap),
+    TotalCap < Demand.
+
+% --- qualification gates ---
+validation_issue(all_suppliers_disqualified(P)) :-
     parts(Parts),
-    forall(member(Part, Parts),
-           (   findall(S, allocatable_supplier(Part, S), All),
-               All \= [],
-               forall(member(S, All), \+ qualified(Part, S))
-           ->  format('  !! ALL SUPPLIERS DISQUALIFIED: part ~w has no qualified supplier (gates too strict)~n',
-                      [Part])
-           ;   true
-           )).
+    member(P, Parts),
+    findall(S, allocatable_supplier(P, S), All),
+    All \== [],
+    \+ ( member(S, All), qualified(P, S) ).
+validation_issue(supplier_disqualified(P, S, Reasons)) :-
+    parts(Parts),
+    member(P, Parts),
+    allocatable_supplier(P, S),
+    findall(R, disqualified(P, S, R), Reasons),
+    Reasons \== [].
 
-%! validate_tiers is det.
-%  Checks that price_tier/5 facts for each pair are non-overlapping
-%  and collectively cover 0..sup.
-validate_tiers :-
-    findall(S-P, price_tier(S, P, _, _, _), SPairs0),
-    sort(SPairs0, SPairs),
-    forall(member(S-P, SPairs),
-           (   findall(tier(Min, Max), price_tier(S, P, Min, Max, _), Tiers),
-               check_tier_coverage(S, P, Tiers)
-           )).
+%% --- helpers for the checks above ---
 
-check_tier_coverage(S, P, Tiers) :-
-    (   Tiers = []
-    ->  true
-    ;   sort_tiers(Tiers, Sorted),
-        check_tier_gaps(S, P, Sorted, 0)
-    ).
-
-sort_tiers(Tiers, Sorted) :-
+tier_pair(S, P, Sorted) :-
+    findall(S0-P0, price_tier(S0, P0, _, _, _), Pairs0),
+    sort(Pairs0, Pairs),
+    member(S-P, Pairs),
+    findall(tier(Min, Max), price_tier(S, P, Min, Max, _), Tiers),
     sort(0, @=<, Tiers, Sorted).
 
-check_tier_gaps(_, _, [], _) :- !.
-check_tier_gaps(S, P, [tier(Min, Max)|Rest], ExpectedMin) :-
-    (   Min =\= ExpectedMin
-    ->  format('  !! TIER GAP: ~w/~w tier starts at ~w, expected ~w~n',
-               [S, P, Min, ExpectedMin])
-    ;   true
-    ),
-    (   Max == sup
-    ->  true
-    ;   (   nonvar(Max), Max < Min
-        ->  format('  !! TIER INVALID: ~w/~w tier [~w, ~w] max < min~n',
-                   [S, P, Min, Max])
-        ;   true
-        )
-    ),
-    (   Max == sup
-    ->  true
-    ;   NextMin is Max + 1,
-        check_tier_gaps(S, P, Rest, NextMin)
+tier_gap_in([tier(Min, Max)|Rest], Expected, ActualMin, ExpectedMin) :-
+    (   Min =\= Expected
+    ->  ActualMin = Min, ExpectedMin = Expected
+    ;   Max \== sup,
+        Next is Max + 1,
+        tier_gap_in(Rest, Next, ActualMin, ExpectedMin)
     ).
 
-%! validate_moq_capacity is det.
-%  Checks that MOQ <= capacity for all pairs where both are defined.
-validate_moq_capacity :-
-    forall(moq(Supplier, Part, Moq),
-           (   capacity(Supplier, Part, Cap)
-           ->  (   Moq > Cap
-               ->  format('  !! MOQ > CAPACITY: ~w/~w MOQ=~w > Cap=~w~n',
-                          [Supplier, Part, Moq, Cap])
-               ;   true
-               )
-           ;   true
-           )).
+costed_part(P) :-
+    findall(P0, ( cost(_, P0, _) ; price_tier(_, P0, _, _, _) ), Ps0),
+    sort(Ps0, Ps),
+    member(P, Ps).
 
-%! validate_demand_exists is det.
-%  Checks that every part referenced in cost/3 or price_tier/5 has a demand/2.
-validate_demand_exists :-
-    findall(P, (cost(_, P, _) ; price_tier(_, P, _, _, _)), Parts0),
-    sort(Parts0, Parts),
-    forall(member(Part, Parts),
-           (   demand(Part, _)
-           ->  true
-           ;   format('  !! MISSING DEMAND: part ~w has costs but no demand/2~n',
-                      [Part])
-           )).
+constrained_pair(S, P) :-
+    findall(S0-P0,
+            ( capacity(S0, P0, _) ; moq(S0, P0, _) ; share(P0, S0, _, _) ),
+            Pairs0),
+    sort(Pairs0, Pairs),
+    member(S-P, Pairs).
 
-%! validate_cost_exists is det.
-%  Checks that every (Supplier, Part) pair with capacity/moq/share also
-%  has a cost/3 or price_tier/5.
-validate_cost_exists :-
-    forall((capacity(S, P, _) ; moq(S, P, _) ; share(P, S, _, _)),
-           (   (   cost(S, P, _)
-               ;   price_tier(S, P, _, _, _)
-               )
-           ->  true
-           ;   format('  !! MISSING COST: ~w/~w has capacity/moq/share but no cost/3~n',
-                      [S, P])
-           )).
+all_capped([], _).
+all_capped([S|Ss], P) :-
+    capacity(S, P, _),
+    all_capped(Ss, P).
 
-%! validate_share_ranges is det.
-%  Checks that share min =< max and both are in 0..100.
-validate_share_ranges :-
-    forall(share(Part, Supplier, MinPct, MaxPct),
-           (   (   MinPct < 0 ; MinPct > 100
-               ->  format('  !! SHARE INVALID: ~w/~w min=~w out of [0,100]~n',
-                          [Part, Supplier, MinPct])
-               ;   true
-               ),
-               (   MaxPct < 0 ; MaxPct > 100
-               ->  format('  !! SHARE INVALID: ~w/~w max=~w out of [0,100]~n',
-                          [Part, Supplier, MaxPct])
-               ;   true
-               ),
-               (   MinPct > MaxPct
-               ->  format('  !! SHARE INVALID: ~w/~w min=~w > max=~w~n',
-                          [Part, Supplier, MinPct, MaxPct])
-               ;   true
-               )
-           )).
+%! issue_severity(+Issue, -Severity) is det.
+%  error   — the model is unsolvable or will produce a wrong answer
+%  warning — suspicious data that may not be what was intended
+%  info    — expected consequence of a rule, surfaced for transparency
+issue_severity(missing_demand(_),                  error).
+issue_severity(missing_cost(_, _),                 warning).
+issue_severity(tier_gap(_, _, _, _),               error).
+issue_severity(tier_inverted(_, _, _, _),          error).
+issue_severity(moq_over_capacity(_, _, _, _),      error).
+issue_severity(share_out_of_range(_, _, _, _),     error).
+issue_severity(share_min_over_max(_, _, _, _),     error).
+issue_severity(share_minimums_exceed_demand(_, _), error).
+issue_severity(share_maximums_below_demand(_, _),  error).
+issue_severity(capacity_below_demand(_, _, _),     error).
+issue_severity(all_suppliers_disqualified(_),      error).
+issue_severity(supplier_disqualified(_, _, _),     info).
+
+%! issue_message(+Issue, -Message) is det.
+%  Plain-language description — no Prolog jargon, safe to show a buyer.
+issue_message(missing_demand(P), Msg) :-
+    format(atom(Msg),
+           'Part ~w has prices but no demand quantity, so it will be ignored.',
+           [P]).
+issue_message(missing_cost(S, P), Msg) :-
+    format(atom(Msg),
+           'Supplier ~w has rules (capacity/MOQ/share) for ~w but no price, so it cannot be awarded any volume.',
+           [S, P]).
+issue_message(tier_gap(S, P, Actual, Expected), Msg) :-
+    format(atom(Msg),
+           'Price breaks for ~w on ~w have a gap: the next tier starts at ~w but ~w is uncovered.',
+           [S, P, Actual, Expected]).
+issue_message(tier_inverted(S, P, Min, Max), Msg) :-
+    format(atom(Msg),
+           'Price break for ~w on ~w runs from ~w to ~w, which is backwards.',
+           [S, P, Min, Max]).
+issue_message(moq_over_capacity(S, P, Moq, Cap), Msg) :-
+    format(atom(Msg),
+           'Supplier ~w requires a minimum order of ~w on ~w but can only make ~w, so they can never be used.',
+           [S, Moq, P, Cap]).
+issue_message(share_out_of_range(P, S, Which, Value), Msg) :-
+    format(atom(Msg),
+           'The ~w share for ~w on ~w is ~w%, which is outside 0-100%.',
+           [Which, S, P, Value]).
+issue_message(share_min_over_max(P, S, Min, Max), Msg) :-
+    format(atom(Msg),
+           'Supplier ~w on ~w must win at least ~w% but at most ~w% — those cannot both hold.',
+           [S, P, Min, Max]).
+issue_message(share_minimums_exceed_demand(P, Total), Msg) :-
+    format(atom(Msg),
+           'Minimum shares on ~w add up to ~w% of demand, which is more than 100% — no award can satisfy them all.',
+           [P, Total]).
+issue_message(share_maximums_below_demand(P, Total), Msg) :-
+    format(atom(Msg),
+           'Maximum shares on ~w add up to only ~w% of demand, so the full quantity cannot be placed.',
+           [P, Total]).
+issue_message(capacity_below_demand(P, TotalCap, Demand), Msg) :-
+    format(atom(Msg),
+           'Qualified suppliers for ~w can supply ~w units in total but ~w are needed.',
+           [P, TotalCap, Demand]).
+issue_message(all_suppliers_disqualified(P), Msg) :-
+    format(atom(Msg),
+           'Every supplier for ~w fails your qualification rules, so ~w cannot be sourced at all.',
+           [P, P]).
+issue_message(supplier_disqualified(P, S, Reasons), Msg) :-
+    reasons_phrase(Reasons, Phrase),
+    format(atom(Msg),
+           'Supplier ~w is excluded from ~w: ~w.',
+           [S, P, Phrase]).
+
+%! reasons_phrase(+Reasons, -Phrase) is det.
+reasons_phrase([R], Phrase) :- !, reason_phrase(R, Phrase).
+reasons_phrase([R|Rest], Phrase) :-
+    reason_phrase(R, Head),
+    reasons_phrase(Rest, Tail),
+    format(atom(Phrase), '~w; ~w', [Head, Tail]).
+
+reason_phrase(otif_below_threshold(unknown, Threshold), Phrase) :- !,
+    format(atom(Phrase),
+           'no on-time delivery record, and ~w% is required', [Threshold]).
+reason_phrase(otif_below_threshold(Actual, Threshold), Phrase) :- !,
+    format(atom(Phrase),
+           'on-time delivery is ~w%, below the required ~w%', [Actual, Threshold]).
+reason_phrase(lead_time_exceeded(unknown, MaxDays), Phrase) :- !,
+    format(atom(Phrase),
+           'no quoted lead time, and the limit is ~w days', [MaxDays]).
+reason_phrase(lead_time_exceeded(Actual, MaxDays), Phrase) :- !,
+    format(atom(Phrase),
+           'lead time is ~w days, over the ~w day limit', [Actual, MaxDays]).
+reason_phrase(missing_certification(Cert), Phrase) :- !,
+    format(atom(Phrase), 'missing the ~w certification', [Cert]).
+reason_phrase(Other, Phrase) :-
+    format(atom(Phrase), '~w', [Other]).
 
 %% ------------------------------------------------------------------ %%
 %%  EXAMPLE QUERIES                                                    %%

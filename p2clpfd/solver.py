@@ -6,7 +6,7 @@ Uses janus-swi to embed SWI-Prolog in-process for zero-overhead calls.
 
 from __future__ import annotations
 
-import os
+import os.path
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +55,30 @@ def _scenarios_to_prolog(scenarios: list[dict]) -> str:
     return "[" + ",".join(parts) + "]"
 
 
+#: Fields that carry Prolog's `null` atom when they do not apply — a
+#: constraint on a whole supplier has no part, and vice versa.
+_NULLABLE_FIELDS = ("supplier", "part")
+
+
+def _nulls_to_none(value: Any) -> Any:
+    """
+    Turn Prolog's `null` atom into a real None.
+
+    janus hands atoms across as strings, so an inapplicable field arrives
+    as the string "null" — which an agent would happily quote as a
+    supplier called "null". Normalise at the boundary rather than making
+    every caller remember the quirk.
+    """
+    if isinstance(value, dict):
+        return {
+            k: (None if k in _NULLABLE_FIELDS and v == "null" else _nulls_to_none(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_nulls_to_none(v) for v in value]
+    return value
+
+
 class Solver:
     """
     Procurement allocation solver.
@@ -98,11 +122,26 @@ class Solver:
                 share_min, share_max, noncost_adj, fixed_cost,
                 min_suppliers, max_suppliers, dual_source,
                 global_capacity, global_share_cap
+
+        Raises:
+            FileNotFoundError: the path does not exist.
+            ValueError: the file exists but could not be parsed.
+
+        A failed load MUST raise rather than return. The Prolog side ships
+        demo facts in facts.pl, so a silent failure would leave those
+        loaded and every later answer would describe the wrong data.
         """
-        janus.query_once(
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"no such CSV file: {path}")
+
+        result = janus.query_once(
             'with_output_to(string(_), load_csv(Path))',
             {'Path': path}
         )
+        # janus reports goal failure via a falsy result or truth=False
+        # depending on version; treat either as a failed load.
+        if result is None or result.get("truth") is False:
+            raise ValueError(f"could not parse {path} as procurement CSV")
         return {"status": "ok", "path": path}
 
     def solve(self, max_cost: Optional[int] = None) -> Optional[dict]:
@@ -234,7 +273,7 @@ class Solver:
             'sensitivity_to_json(Step, JSON)',
             {'Step': step}
         )
-        return result.get("JSON", {"status": "error"})
+        return _nulls_to_none(result.get("JSON", {"status": "error"}))
 
     def disqualified(self) -> list:
         """

@@ -1,0 +1,5 @@
+part,supplier,period,demand,unit_cost,capacity,holding_cost
+housing,acme,1,100,10,200,2
+housing,acme,2,300,10,200,2
+housing,borex,1,100,14,150,2
+housing,borex,2,300,14,150,2

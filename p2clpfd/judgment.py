@@ -180,7 +180,7 @@ def assess_concentration(solution: dict) -> list[Finding]:
                 kind="single_source",
                 severity="warning",
                 say_to_user=(
-                    f"{part['part']} comes entirely from {active[0]['supplier']} — "
+                    f"All of {part['part']} comes from {active[0]['supplier']} — "
                     f"if they have a problem, you have no second source."
                 ),
                 detail={
@@ -200,8 +200,8 @@ def assess_concentration(solution: dict) -> list[Finding]:
                 kind="spend_concentration",
                 severity="warning",
                 say_to_user=(
-                    f"{supplier} would hold {share}% of your total spend "
-                    f"({_money(spend)}), which is a lot of leverage to give "
+                    f"Spend is concentrated — {supplier} would hold {share}% of "
+                    f"it ({_money(spend)}), which is a lot of leverage to give "
                     f"one supplier."
                 ),
                 detail={
@@ -353,9 +353,8 @@ def assess_exclusions(disqualified: list[dict]) -> list[Finding]:
         kind="suppliers_excluded",
         severity="info",
         say_to_user=(
-            f"{names} {'were' if len(by_supplier) > 1 else 'was'} excluded by "
-            f"your qualification rules before price was even considered — "
-            f"worth checking the rules are current."
+            f"Excluded by your qualification rules before price was even "
+            f"considered: {names}. Worth checking those rules are current."
         ),
         detail={"excluded": disqualified},
     )]

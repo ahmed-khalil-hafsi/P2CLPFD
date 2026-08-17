@@ -36,6 +36,13 @@
 %%%   rebate_threshold  total units across all parts to earn the rebate
 %%%   rebate_pct        % off that supplier's entire spend once earned
 %%%
+%%% Multi-period columns (optional; presence of `period` activates them):
+%%%   period            period number (1, 2, 3, ...)
+%%%   holding_cost      per-unit-per-period cost of carrying inventory
+%%%   With a period column, `demand` and `capacity` on that row are read
+%%%   as that PERIOD's demand and capacity. demand/2 is maintained as the
+%%%   total across periods so the single-period solver still works.
+%%%
 %%% Route columns (group ceilings shared by a SET of suppliers):
 %%%   route             per-supplier group name (hormuz, bypass, atlantic)
 %%%   route_capacity    absolute ceiling on that route's combined volume
@@ -98,9 +105,10 @@ load_csv(Path) :-
         fail
     ),
     csv_read_file(Path, Rows, [strip(true)]),
-    retract_all_facts,
     Rows = [HeaderRow | DataRows],
     HeaderRow =.. [_ | Header],
+    check_required_columns(Header, Path),
+    retract_all_facts,
     assert_rows(Header, DataRows),
     length(DataRows, N),
     format('Loaded ~w rows from ~w~n', [N, Path]).
@@ -111,16 +119,35 @@ load_csv(Path) :-
 %    keep_existing(true) — don't clear existing facts before loading
 %
 load_csv(Path, Options) :-
+    csv_read_file(Path, Rows, [strip(true)]),
+    Rows = [HeaderRow | DataRows],
+    HeaderRow =.. [_ | Header],
+    check_required_columns(Header, Path),
     (   memberchk(keep_existing(true), Options)
     ->  true
     ;   retract_all_facts
     ),
-    csv_read_file(Path, Rows, [strip(true)]),
-    Rows = [HeaderRow | DataRows],
-    HeaderRow =.. [_ | Header],
     assert_rows(Header, DataRows),
     length(DataRows, N),
     format('Loaded ~w rows from ~w~n', [N, Path]).
+
+%! check_required_columns(+Header, +Path) is semidet.
+%
+%  Every row is keyed by part and supplier, so a file without those
+%  columns is not procurement data. Fail loudly instead of loading zero
+%  facts and later reporting a a cost of nothing, which reads like a
+%  valid answer. Checked BEFORE retracting, so a bad file cannot destroy
+%  facts that were already loaded.
+%
+check_required_columns(Header, Path) :-
+    (   memberchk(part, Header),
+        memberchk(supplier, Header)
+    ->  true
+    ;   format('ERROR: ~w is not a procurement CSV~n', [Path]),
+        format('       required columns: part, supplier~n'),
+        format('       found: ~w~n', [Header]),
+        fail
+    ).
 
 %% ------------------------------------------------------------------ %%
 %%  FACT MANAGEMENT                                                    %%
@@ -220,6 +247,7 @@ assert_row_facts(Pairs) :-
     assert_region_facts(Supplier, Pairs),
     assert_route_facts(Supplier, Pairs),
     assert_rebate_fact(Supplier, Pairs),
+    assert_period_facts(Part, Supplier, Pairs),
     % Global facts (may appear on any row; last non-empty wins)
     assert_global_min_otif(Pairs).
 
@@ -430,6 +458,49 @@ assert_rebate_fact(Supplier, Pairs) :-
     retractall(rebate(Supplier, _, _)),
     assert(rebate(Supplier, Threshold, Pct)).
 assert_rebate_fact(_, _).
+
+%% --- Multi-period facts ----------------------------------------------
+%   A row carrying a `period` column describes ONE period of that part.
+%   Its `demand` is that period's demand and its `capacity` that period's
+%   capacity, so the natural layout is one row per part+supplier+period.
+%
+%   demand/2 is kept in step as the total across periods, so the ordinary
+%   single-period solver still sees a coherent problem from the same file.
+
+assert_period_facts(Part, Supplier, Pairs) :-
+    member(period-PeriodVal, Pairs),
+    PeriodVal \= '',
+    !,
+    to_number(PeriodVal, Period),
+    (   member(demand-DVal, Pairs), DVal \= ''
+    ->  to_number(DVal, D),
+        retractall(period_demand(Part, Period, _)),
+        assert(period_demand(Part, Period, D)),
+        refresh_total_demand(Part)
+    ;   true
+    ),
+    (   member(capacity-CVal, Pairs), CVal \= ''
+    ->  to_number(CVal, C),
+        retractall(period_capacity(Supplier, Part, Period, _)),
+        assert(period_capacity(Supplier, Part, Period, C))
+    ;   true
+    ),
+    (   member(holding_cost-HVal, Pairs), HVal \= ''
+    ->  to_number(HVal, H),
+        retractall(holding_cost(Part, _)),
+        assert(holding_cost(Part, H))
+    ;   true
+    ).
+assert_period_facts(_, _, _).
+
+%! refresh_total_demand(+Part) is det.
+%  demand/2 becomes the sum over the periods seen so far. Runs after the
+%  plain demand column has been asserted, so it overwrites that row value.
+refresh_total_demand(Part) :-
+    findall(D, period_demand(Part, _, D), Ds),
+    sum_list(Ds, Total),
+    retractall(demand(Part, _)),
+    assert(demand(Part, Total)).
 
 %! split_cert_list(+Value, -Certs) is det.
 %  Splits a semicolon-separated cell into a list of atoms.

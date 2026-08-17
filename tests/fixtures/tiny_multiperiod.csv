@@ -1,0 +1,3 @@
+part,supplier,period,demand,unit_cost,capacity,holding_cost
+bolt,alpha,1,10,10,20,2
+bolt,alpha,2,30,10,20,2

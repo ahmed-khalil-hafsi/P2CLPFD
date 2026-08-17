@@ -16,6 +16,7 @@
 :- ['facts.pl'].
 :- ['solver.pl'].
 :- ['csv_loader.pl'].
+:- ['decompose.pl'].
 :- ['scenarios.pl'].
 :- ['sensitivity.pl'].
 :- ['multiperiod.pl'].

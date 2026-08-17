@@ -22,8 +22,8 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
-    for name in ["facts", "solver", "csv_loader", "scenarios", "sensitivity",
-                 "json_api", "tracer"]:
+    for name in ["facts", "solver", "csv_loader", "decompose", "scenarios",
+                 "sensitivity", "multiperiod", "json_api", "tracer"]:
         janus.consult(str(_PL_DIR / f"{name}.pl"))
     _LOADED = True
 
@@ -172,19 +172,39 @@ class Solver:
         """
         Validate the currently loaded facts for common issues.
 
-        Checks:
-            - Tier coverage (gaps, overlaps)
-            - MOQ > capacity
-            - Missing demand or cost facts
-            - Share range validity
+        Checks tier coverage, MOQ vs capacity, missing demand/cost,
+        share range validity, shares that cannot sum to demand,
+        capacity below demand, and qualification-gate exclusions.
 
         Returns:
-            Dict with "status" and any warnings.
+            Dict with:
+                - "status": "error" (unsolvable or wrong), "warning"
+                  (suspicious), or "ok"
+                - "issue_count": int
+                - "issues": [{severity, message, detail}, ...] where
+                  message is plain language safe to show a buyer.
         """
-        janus.query_once(
-            'with_output_to(string(_), validate_facts)'
-        )
-        return {"status": "ok"}
+        result = janus.query_once('validate_to_json(JSON)')
+        return result.get("JSON", {"status": "error", "issues": []})
+
+    def solve_multiperiod(self) -> Optional[dict]:
+        """
+        Solve across periods with inventory carryover.
+
+        Requires period_demand facts (CSV columns period/period_demand).
+        The plan may buy ahead of demand when a later period's capacity
+        binds and holding cost is cheaper than the shortfall.
+
+        Returns:
+            Dict with "tco" and "plan" (a list of
+            {part, period, suppliers, end_inventory}), or None when no
+            feasible plan exists.
+        """
+        result = janus.query_once('solve_multiperiod_to_json(JSON)')
+        json = result.get("JSON")
+        if json and json.get("status") == "ok":
+            return json
+        return None
 
     def sensitivity(self, step: int = 1) -> dict:
         """
@@ -223,6 +243,44 @@ class Solver:
         """
         result = janus.query_once('disqualified_to_json(JSON)')
         return result.get("JSON", [])
+
+    def rebates(self) -> list:
+        """Portfolio rebates in effect: [{supplier, threshold, pct}, ...]."""
+        result = janus.query_once('rebates_to_json(JSON)')
+        return result.get("JSON", [])
+
+    def advise(self, sensitivity_step: int = 1) -> dict:
+        """
+        Solve, then interpret the result for a decision-maker.
+
+        Runs the full pipeline — validate, solve, sensitivity, gates —
+        and passes it through the judgment layer, which returns a
+        one-line verdict plus ranked findings written in plain
+        procurement language.
+
+        This is the entry point an agent should reach for first: it
+        answers "what should I do?" rather than "what is the optimum?".
+
+        Args:
+            sensitivity_step: Relaxation size for quantity constraints
+                when computing shadow prices.
+
+        Returns:
+            Dict with "verdict", "findings", and "tco". See
+            p2clpfd.judgment.advise for the finding schema.
+        """
+        from .judgment import advise as _advise
+
+        validation = self.validate()
+        solution = self.solve()
+        sensitivity = self.sensitivity(sensitivity_step) if solution else None
+        return _advise(
+            solution=solution,
+            validation=validation,
+            sensitivity=sensitivity,
+            disqualified=self.disqualified(),
+            rebates=self.rebates(),
+        )
 
     def solve_trace(self, max_cost: Optional[int] = None) -> dict:
         """

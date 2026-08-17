@@ -32,6 +32,15 @@
 %%%   fx_rate        FX multiplier as integer % for that row's region
 %%%   logistics_cost per-unit freight/customs for that row's region
 %%%
+%%% Rebate columns (per supplier, both required together):
+%%%   rebate_threshold  total units across all parts to earn the rebate
+%%%   rebate_pct        % off that supplier's entire spend once earned
+%%%
+%%% Route columns (group ceilings shared by a SET of suppliers):
+%%%   route             per-supplier group name (hormuz, bypass, atlantic)
+%%%   route_capacity    absolute ceiling on that route's combined volume
+%%%   route_share_cap   that route's combined volume as a max % of demand
+%%%
 %%% Empty cells are treated as "absent" (no constraint / default).
 %%% Per-part and per-supplier attributes may appear in any row of
 %%% that part/supplier; the last non-empty value wins.
@@ -69,6 +78,9 @@
 :- dynamic period_demand/3.
 :- dynamic period_capacity/4.
 :- dynamic holding_cost/2.
+:- dynamic supplier_route/2.
+:- dynamic route_capacity/2.
+:- dynamic max_route_share/2.
 
 %% ------------------------------------------------------------------ %%
 %%  PUBLIC API                                                         %%
@@ -141,7 +153,10 @@ retract_all_facts :-
     retractall(logistics_cost(_, _)),
     retractall(period_demand(_, _, _)),
     retractall(period_capacity(_, _, _, _)),
-    retractall(holding_cost(_, _)).
+    retractall(holding_cost(_, _)),
+    retractall(supplier_route(_, _)),
+    retractall(route_capacity(_, _)),
+    retractall(max_route_share(_, _)).
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%
@@ -203,6 +218,8 @@ assert_row_facts(Pairs) :-
     assert_supplier_fact(otif, otif(_, _), Supplier, Pairs),
     assert_certifications_fact(Supplier, Pairs),
     assert_region_facts(Supplier, Pairs),
+    assert_route_facts(Supplier, Pairs),
+    assert_rebate_fact(Supplier, Pairs),
     % Global facts (may appear on any row; last non-empty wins)
     assert_global_min_otif(Pairs).
 
@@ -374,6 +391,45 @@ assert_region_facts(Supplier, Pairs) :-
         )
     ;   true
     ).
+
+%% --- Route (group) facts ----------------------------------------------
+%   route:            per-supplier group name (e.g. hormuz, bypass, atlantic)
+%   route_capacity:   absolute ceiling on the WHOLE route's total volume
+%   route_share_cap:  route total as a max %% of total demand
+%   The two ceilings attach to the route named in the same row, so they may
+%   be stated once on any row belonging to that route.
+
+assert_route_facts(Supplier, Pairs) :-
+    (   member(route-RouteVal, Pairs), RouteVal \= ''
+    ->  retractall(supplier_route(Supplier, _)),
+        assert(supplier_route(Supplier, RouteVal)),
+        (   member(route_capacity-CapVal, Pairs), CapVal \= ''
+        ->  to_number(CapVal, Cap),
+            retractall(route_capacity(RouteVal, _)),
+            assert(route_capacity(RouteVal, Cap))
+        ;   true
+        ),
+        (   member(route_share_cap-ShareVal, Pairs), ShareVal \= ''
+        ->  to_number(ShareVal, Share),
+            retractall(max_route_share(RouteVal, _)),
+            assert(max_route_share(RouteVal, Share))
+        ;   true
+        )
+    ;   true
+    ).
+
+%% --- Portfolio rebate (per supplier, cross-part) ----------------------
+%   Both columns must be present for the rebate to apply.
+
+assert_rebate_fact(Supplier, Pairs) :-
+    member(rebate_threshold-ThreshVal, Pairs), ThreshVal \= '',
+    member(rebate_pct-PctVal, Pairs), PctVal \= '',
+    !,
+    to_number(ThreshVal, Threshold),
+    to_number(PctVal, Pct),
+    retractall(rebate(Supplier, _, _)),
+    assert(rebate(Supplier, Threshold, Pct)).
+assert_rebate_fact(_, _).
 
 %! split_cert_list(+Value, -Certs) is det.
 %  Splits a semicolon-separated cell into a list of atoms.

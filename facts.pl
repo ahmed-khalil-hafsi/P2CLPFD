@@ -20,6 +20,8 @@
 :- dynamic fx_rate/2.
 :- dynamic logistics_cost/2.
 :- dynamic rebate_forced/2.
+:- dynamic share_increment/1.
+:- dynamic share_increment/2.
 :- dynamic supplier_route/2.
 :- dynamic route_capacity/2.
 :- dynamic max_route_share/2.
@@ -102,6 +104,15 @@
 %%%   required_certification(Cert).                   % optional
 %%%   required_certification(Part, Cert).             % optional
 %%%       Global / per-part gate: suppliers lacking Cert are disqualified.
+%%%
+%%%   share_increment(Pct).                           % optional
+%%%   share_increment(Part, Pct).                     % optional
+%%%       Awards must fall on a Pct% grid of the part's demand — 5 means
+%%%       every supplier gets a whole multiple of 5% (0, 5, 10, ... 100).
+%%%       This is how awards are written in practice ("60/30/10"), and it
+%%%       is also the single biggest performance lever: it decouples solve
+%%%       time from order quantity entirely. Per-part overrides global.
+%%%       Absent => any integer quantity is allowed.
 %%%
 %%%   --- Landed cost (region-based FX and logistics) ---
 %%%

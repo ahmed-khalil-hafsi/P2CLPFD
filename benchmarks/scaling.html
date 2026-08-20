@@ -1,0 +1,274 @@
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
+
+  .viz-root {
+    /* Two type roles: sans for prose, mono for every measured figure.
+       The page is nothing but measurements, so the mono is subject
+       matter rather than decoration — and digits align for free. */
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--plane);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    line-height: 1.55;
+    padding: 32px 20px 56px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 6px;
+        letter-spacing: -0.015em; text-wrap: balance; }
+  .sub { color: var(--text-secondary); margin: 0 0 28px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px 24px 10px;
+    margin-bottom: 22px;
+  }
+  .card h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 4px; }
+  .lede { color: var(--text-secondary); margin: 0 0 14px; font-size: 0.94rem; }
+  .hero { font-family: var(--mono); font-size: 2.1rem; font-weight: 600;
+           letter-spacing: -0.03em; margin: 4px 0 6px; }
+  .hero-label { color: var(--text-secondary); font-size: 0.94rem; margin: 0; }
+  .note { color: var(--text-muted); font-size: 0.85rem; margin: 4px 0 14px; }
+  .chart { margin: 0 0 6px; }
+  .chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+
+  .grid { stroke: var(--grid); stroke-width: 1; }
+  .axis { stroke: var(--axis); stroke-width: 1; }
+  .line { fill: none; stroke-width: 2;
+           stroke-linejoin: round; stroke-linecap: round; }
+  .dot { stroke: var(--surface-1); stroke-width: 2; }
+  .line.s1 { stroke: var(--series-1); }
+  .line.s2 { stroke: var(--series-2); }
+  .dot.s1 { fill: var(--series-1); }
+  .dot.s2 { fill: var(--series-2); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 0 0 8px 4px; }
+  .key { display: inline-flex; align-items: center; gap: 7px;
+          color: var(--text-secondary); font-size: 0.85rem; }
+  .swatch { width: 16px; height: 2px; border-radius: 1px; flex: none; }
+  .swatch.s1 { background: var(--series-1); }
+  .swatch.s2 { background: var(--series-2); }
+  .hit { fill: transparent; cursor: crosshair; outline: none; }
+  .hit:focus-visible { stroke: var(--text-primary); stroke-width: 2; }
+  summary:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px;
+                           border-radius: 4px; }
+  @media (prefers-reduced-motion: reduce) {
+    .tip { transition: none; }
+  }
+  .tick { fill: var(--text-muted); font-size: 10.5px; font-family: var(--mono);
+           font-variant-numeric: tabular-nums; }
+  .tick-y { text-anchor: end; }
+  .tick-x { text-anchor: middle; }
+  .axis-title-x, .axis-title-y { fill: var(--text-secondary); font-size: 12px;
+                                  text-anchor: middle; }
+  .end-label { fill: var(--text-primary); font-size: 12px; font-weight: 600;
+                font-family: var(--mono); }
+
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 18px;
+           font-size: 0.88rem; }
+  caption { text-align: left; color: var(--text-secondary); padding-bottom: 8px;
+             font-size: 0.88rem; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--border);
+            font-family: var(--mono); font-variant-numeric: tabular-nums;
+            font-size: 0.85rem; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; font-family: var(--sans);
+        font-size: 0.82rem; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 0.88rem;
+             padding: 6px 0; }
+  .tip {
+    position: fixed; pointer-events: none; opacity: 0;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 11px; font-size: 0.85rem; z-index: 20;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.13); transition: opacity .1s;
+  }
+  .tip b { font-size: 1.05rem; font-weight: 600; font-family: var(--mono); }
+  .tip span { color: var(--text-secondary); }
+  .method { color: var(--text-secondary); font-size: 0.9rem; }
+  .method code { background: var(--plane); padding: 1px 5px; border-radius: 4px;
+                  font-size: 0.85em; }
+  .table-scroll { overflow-x: auto; }
+</style>
+
+<div class="viz-root">
+<div class="wrap">
+  <h1>P2CLPFD scaling</h1>
+  <p class="sub">4 suppliers, quad sourcing,
+  5% minimum share per supplier. Everything else held fixed.</p>
+
+  <section class="card">
+    <h2>Where the time goes</h2>
+    <p class="hero">quantity, not catalogue size</p>
+    <p class="hero-label">Sourcing ten times as many items costs ten times the
+    time — that scales fine. Ordering ten times the <em>quantity</em> of one item
+    costs far more than ten times, and that is the ceiling you hit first.
+    Restricting awards to a 5% grid removes quantity from the problem altogether: 0.32s at 20,000 units, against 37s at 400 units without it.</p>
+    <div style="height:14px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Time against number of items</h2>
+    <p class="lede">Per-item cost is flat at roughly 105 ms — 115 ms at 100 items, 105 ms at 3,000. Measured growth is x<sup>0.99</sup>, i.e. linear: doubling the catalogue doubles the time and no worse, because nothing here ties one item to another.</p>
+    <figure class="chart" id="items">
+  
+  <svg viewBox="0 0 560 330" role="img"
+       aria-label="solve time (seconds) against items sourced" preserveAspectRatio="xMidYMid meet">
+    <line x1="62" y1="284.0" x2="534" y2="284.0" class="grid"/><line x1="62" y1="218.0" x2="534" y2="218.0" class="grid"/><line x1="62" y1="152.0" x2="534" y2="152.0" class="grid"/><line x1="62" y1="86.0" x2="534" y2="86.0" class="grid"/><line x1="62" y1="20.0" x2="534" y2="20.0" class="grid"/>
+    <line x1="62" y1="20" x2="62" y2="284" class="axis"/>
+    <line x1="62" y1="284" x2="534" y2="284" class="axis"/>
+    <text x="52" y="288.0" class="tick tick-y">0</text><text x="52" y="222.0" class="tick tick-y">100</text><text x="52" y="156.0" class="tick tick-y">200</text><text x="52" y="90.0" class="tick tick-y">300</text><text x="52" y="24.0" class="tick tick-y">400</text>
+    <text x="73.8" y="304" class="tick tick-x">100</text><text x="121.0" y="304" class="tick tick-x">500</text><text x="150.5" y="304" class="tick tick-x">750</text><text x="239.0" y="304" class="tick tick-x">1,500</text><text x="298.0" y="304" class="tick tick-x">2,000</text><text x="357.0" y="304" class="tick tick-x">2,500</text><text x="416.0" y="304" class="tick tick-x">3,000</text>
+    <path d="M73.8,276.4 L91.5,265.0 L121.0,247.3 L150.5,228.9 L180.0,209.2 L239.0,166.8 L298.0,136.7 L357.0,90.7 L416.0,77.0" class="line s1"/>
+    <circle cx="73.8" cy="276.4" r="4.5" class="dot s1"/><circle cx="91.5" cy="265.0" r="4.5" class="dot s1"/><circle cx="121.0" cy="247.3" r="4.5" class="dot s1"/><circle cx="150.5" cy="228.9" r="4.5" class="dot s1"/><circle cx="180.0" cy="209.2" r="4.5" class="dot s1"/><circle cx="239.0" cy="166.8" r="4.5" class="dot s1"/><circle cx="298.0" cy="136.7" r="4.5" class="dot s1"/><circle cx="357.0" cy="90.7" r="4.5" class="dot s1"/><circle cx="416.0" cy="77.0" r="4.5" class="dot s1"/>
+    <text x="426.0" y="65.0" class="end-label" text-anchor="start">314s</text>
+    <text class="axis-title-y" transform="translate(14,152.0) rotate(-90)">solve time (seconds)</text>
+    <text class="axis-title-x" x="298.0" y="324">items sourced</text>
+    <circle cx="73.8" cy="276.4" r="13" class="hit" tabindex="0" role="img" data-x="100" data-y="11.466" data-var="items" data-series="items" aria-label="items, 100 items: 11.466 seconds"/><circle cx="91.5" cy="265.0" r="13" class="hit" tabindex="0" role="img" data-x="250" data-y="28.827" data-var="items" data-series="items" aria-label="items, 250 items: 28.827 seconds"/><circle cx="121.0" cy="247.3" r="13" class="hit" tabindex="0" role="img" data-x="500" data-y="55.576" data-var="items" data-series="items" aria-label="items, 500 items: 55.576 seconds"/><circle cx="150.5" cy="228.9" r="13" class="hit" tabindex="0" role="img" data-x="750" data-y="83.517" data-var="items" data-series="items" aria-label="items, 750 items: 83.517 seconds"/><circle cx="180.0" cy="209.2" r="13" class="hit" tabindex="0" role="img" data-x="1,000" data-y="113.408" data-var="items" data-series="items" aria-label="items, 1,000 items: 113.408 seconds"/><circle cx="239.0" cy="166.8" r="13" class="hit" tabindex="0" role="img" data-x="1,500" data-y="177.603" data-var="items" data-series="items" aria-label="items, 1,500 items: 177.603 seconds"/><circle cx="298.0" cy="136.7" r="13" class="hit" tabindex="0" role="img" data-x="2,000" data-y="223.226" data-var="items" data-series="items" aria-label="items, 2,000 items: 223.226 seconds"/><circle cx="357.0" cy="90.7" r="13" class="hit" tabindex="0" role="img" data-x="2,500" data-y="292.859" data-var="items" data-series="items" aria-label="items, 2,500 items: 292.859 seconds"/><circle cx="416.0" cy="77.0" r="13" class="hit" tabindex="0" role="img" data-x="3,000" data-y="313.578" data-var="items" data-series="items" aria-label="items, 3,000 items: 313.578 seconds"/>
+  </svg>
+</figure>
+    
+    <details><summary>Table view</summary>
+      <div class="table-scroll">
+      <table>
+  <caption>Solve time by item count, 20 units per item</caption>
+  <thead><tr><th>Size</th><th>Solve time</th><th>Per unit</th></tr></thead>
+  <tbody><tr><td>100</td><td>11.47s</td><td>114.7 ms/item</td></tr><tr><td>250</td><td>28.83s</td><td>115.3 ms/item</td></tr><tr><td>500</td><td>55.58s</td><td>111.2 ms/item</td></tr><tr><td>750</td><td>83.52s</td><td>111.4 ms/item</td></tr><tr><td>1,000</td><td>113.41s</td><td>113.4 ms/item</td></tr><tr><td>1,500</td><td>177.60s</td><td>118.4 ms/item</td></tr><tr><td>2,000</td><td>223.23s</td><td>111.6 ms/item</td></tr><tr><td>2,500</td><td>292.86s</td><td>117.1 ms/item</td></tr><tr><td>3,000</td><td>313.58s</td><td>104.5 ms/item</td></tr></tbody>
+</table>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Time against demand per item</h2>
+    <p class="lede">With quantities free, 40× the demand costs 1333× the time — measured growth x<sup>1.90</sup>, near-quadratic, because the quantity sets each variable's domain and therefore the space the search must cover. Restrict awards to a 5% grid and the curve flattens: x<sup>0.16</sup>, still 0.32s at 20,000 units — 50× further out than the free run could reach at all.</p>
+    <figure class="chart" id="demand">
+  <div class="legend"><span class="key"><span class="swatch s1"></span>free quantities</span><span class="key"><span class="swatch s2"></span>5% award grid</span></div>
+  <svg viewBox="0 0 560 330" role="img"
+       aria-label="solve time (seconds) against units demanded (single item)" preserveAspectRatio="xMidYMid meet">
+    <line x1="62" y1="284.0" x2="534" y2="284.0" class="grid"/><line x1="62" y1="218.0" x2="534" y2="218.0" class="grid"/><line x1="62" y1="152.0" x2="534" y2="152.0" class="grid"/><line x1="62" y1="86.0" x2="534" y2="86.0" class="grid"/><line x1="62" y1="20.0" x2="534" y2="20.0" class="grid"/>
+    <line x1="62" y1="20" x2="62" y2="284" class="axis"/>
+    <line x1="62" y1="284" x2="534" y2="284" class="axis"/>
+    <text x="52" y="288.0" class="tick tick-y">0</text><text x="52" y="222.0" class="tick tick-y">10</text><text x="52" y="156.0" class="tick tick-y">20</text><text x="52" y="90.0" class="tick tick-y">30</text><text x="52" y="24.0" class="tick tick-y">40</text>
+    <text x="73.8" y="304" class="tick tick-x">10</text><text x="109.2" y="304" class="tick tick-x">40</text><text x="156.4" y="304" class="tick tick-x">80</text><text x="203.6" y="304" class="tick tick-x">120</text><text x="250.8" y="304" class="tick tick-x">160</text><text x="298.0" y="304" class="tick tick-x">200</text><text x="416.0" y="304" class="tick tick-x">300</text><text x="534.0" y="304" class="tick tick-x">400</text>
+    <path d="M73.8,283.8 L85.6,283.1 L109.2,280.9 L156.4,273.3 L203.6,261.7 L250.8,245.5 L298.0,224.5 L416.0,150.9 L534.0,37.7" class="line s1"/><path d="M73.8,283.7 L85.6,283.0 L109.2,282.0 L156.4,282.0 L298.0,282.0 L534.0,281.9" class="line s2"/>
+    <circle cx="73.8" cy="283.8" r="4.5" class="dot s1"/><circle cx="85.6" cy="283.1" r="4.5" class="dot s1"/><circle cx="109.2" cy="280.9" r="4.5" class="dot s1"/><circle cx="156.4" cy="273.3" r="4.5" class="dot s1"/><circle cx="203.6" cy="261.7" r="4.5" class="dot s1"/><circle cx="250.8" cy="245.5" r="4.5" class="dot s1"/><circle cx="298.0" cy="224.5" r="4.5" class="dot s1"/><circle cx="416.0" cy="150.9" r="4.5" class="dot s1"/><circle cx="534.0" cy="37.7" r="4.5" class="dot s1"/><circle cx="73.8" cy="283.7" r="4.5" class="dot s2"/><circle cx="85.6" cy="283.0" r="4.5" class="dot s2"/><circle cx="109.2" cy="282.0" r="4.5" class="dot s2"/><circle cx="156.4" cy="282.0" r="4.5" class="dot s2"/><circle cx="298.0" cy="282.0" r="4.5" class="dot s2"/><circle cx="534.0" cy="281.9" r="4.5" class="dot s2"/>
+    <text x="524.0" y="25.7" class="end-label" text-anchor="end">37s</text><text x="524.0" y="269.9" class="end-label" text-anchor="end">0.31s</text>
+    <text class="axis-title-y" transform="translate(14,152.0) rotate(-90)">solve time (seconds)</text>
+    <text class="axis-title-x" x="298.0" y="324">units demanded (single item)</text>
+    <circle cx="73.8" cy="283.8" r="13" class="hit" tabindex="0" role="img" data-x="10" data-y="0.028" data-var="units" data-series="free quantities" aria-label="free quantities, 10 units: 0.028 seconds"/><circle cx="85.6" cy="283.1" r="13" class="hit" tabindex="0" role="img" data-x="20" data-y="0.137" data-var="units" data-series="free quantities" aria-label="free quantities, 20 units: 0.137 seconds"/><circle cx="109.2" cy="280.9" r="13" class="hit" tabindex="0" role="img" data-x="40" data-y="0.466" data-var="units" data-series="free quantities" aria-label="free quantities, 40 units: 0.466 seconds"/><circle cx="156.4" cy="273.3" r="13" class="hit" tabindex="0" role="img" data-x="80" data-y="1.622" data-var="units" data-series="free quantities" aria-label="free quantities, 80 units: 1.622 seconds"/><circle cx="203.6" cy="261.7" r="13" class="hit" tabindex="0" role="img" data-x="120" data-y="3.384" data-var="units" data-series="free quantities" aria-label="free quantities, 120 units: 3.384 seconds"/><circle cx="250.8" cy="245.5" r="13" class="hit" tabindex="0" role="img" data-x="160" data-y="5.838" data-var="units" data-series="free quantities" aria-label="free quantities, 160 units: 5.838 seconds"/><circle cx="298.0" cy="224.5" r="13" class="hit" tabindex="0" role="img" data-x="200" data-y="9.016" data-var="units" data-series="free quantities" aria-label="free quantities, 200 units: 9.016 seconds"/><circle cx="416.0" cy="150.9" r="13" class="hit" tabindex="0" role="img" data-x="300" data-y="20.172" data-var="units" data-series="free quantities" aria-label="free quantities, 300 units: 20.172 seconds"/><circle cx="534.0" cy="37.7" r="13" class="hit" tabindex="0" role="img" data-x="400" data-y="37.312" data-var="units" data-series="free quantities" aria-label="free quantities, 400 units: 37.312 seconds"/><circle cx="73.8" cy="283.7" r="13" class="hit" tabindex="0" role="img" data-x="10" data-y="0.046" data-var="units" data-series="5% award grid" aria-label="5% award grid, 10 units: 0.046 seconds"/><circle cx="85.6" cy="283.0" r="13" class="hit" tabindex="0" role="img" data-x="20" data-y="0.147" data-var="units" data-series="5% award grid" aria-label="5% award grid, 20 units: 0.147 seconds"/><circle cx="109.2" cy="282.0" r="13" class="hit" tabindex="0" role="img" data-x="40" data-y="0.301" data-var="units" data-series="5% award grid" aria-label="5% award grid, 40 units: 0.301 seconds"/><circle cx="156.4" cy="282.0" r="13" class="hit" tabindex="0" role="img" data-x="80" data-y="0.299" data-var="units" data-series="5% award grid" aria-label="5% award grid, 80 units: 0.299 seconds"/><circle cx="298.0" cy="282.0" r="13" class="hit" tabindex="0" role="img" data-x="200" data-y="0.308" data-var="units" data-series="5% award grid" aria-label="5% award grid, 200 units: 0.308 seconds"/><circle cx="534.0" cy="281.9" r="13" class="hit" tabindex="0" role="img" data-x="400" data-y="0.311" data-var="units" data-series="5% award grid" aria-label="5% award grid, 400 units: 0.311 seconds"/>
+  </svg>
+</figure>
+    <details><summary>Table view</summary>
+      <div class="table-scroll">
+      <table>
+  <caption>Solve time by demand, one item, free quantities</caption>
+  <thead><tr><th>Size</th><th>Solve time</th><th>Per unit</th></tr></thead>
+  <tbody><tr><td>10 units</td><td>0.03s</td><td>2.8 ms/unit</td></tr><tr><td>20 units</td><td>0.14s</td><td>6.9 ms/unit</td></tr><tr><td>40 units</td><td>0.47s</td><td>11.6 ms/unit</td></tr><tr><td>80 units</td><td>1.62s</td><td>20.3 ms/unit</td></tr><tr><td>120 units</td><td>3.38s</td><td>28.2 ms/unit</td></tr><tr><td>160 units</td><td>5.84s</td><td>36.5 ms/unit</td></tr><tr><td>200 units</td><td>9.02s</td><td>45.1 ms/unit</td></tr><tr><td>300 units</td><td>20.17s</td><td>67.2 ms/unit</td></tr><tr><td>400 units</td><td>37.31s</td><td>93.3 ms/unit</td></tr></tbody>
+</table>
+      <table>
+  <caption>Solve time on a 5% award grid, one item</caption>
+  <thead><tr><th>Size</th><th>Solve time</th><th>Per unit</th></tr></thead>
+  <tbody><tr><td>10 units</td><td>0.05s</td><td>4.64 ms/unit</td></tr><tr><td>20 units</td><td>0.15s</td><td>7.33 ms/unit</td></tr><tr><td>40 units</td><td>0.30s</td><td>7.52 ms/unit</td></tr><tr><td>80 units</td><td>0.30s</td><td>3.74 ms/unit</td></tr><tr><td>200 units</td><td>0.31s</td><td>1.54 ms/unit</td></tr><tr><td>400 units</td><td>0.31s</td><td>0.78 ms/unit</td></tr><tr><td>1,000 units</td><td>0.32s</td><td>0.32 ms/unit</td></tr><tr><td>5,000 units</td><td>0.31s</td><td>0.06 ms/unit</td></tr><tr><td>20,000 units</td><td>0.32s</td><td>0.02 ms/unit</td></tr></tbody>
+</table>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>What one portfolio-wide rule costs</h2>
+    <p class="lede">Adding a cap on any supplier's share of <em>total</em> volume
+    ties every item into a single search — minimizing a sum couples everything
+    the sum touches, so the per-item decomposition no longer applies.</p>
+    <p class="hero">&gt; 550s</p>
+    <p class="hero-label">at just 100 items, against 11s for the same items with no portfolio rule. The sweep
+    could not produce a curve because its very first point exceeded the budget.
+    This is the case <code>decompose.pl</code> still cannot split, and it is the
+    next thing worth fixing.</p>
+    <div style="height:14px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Method</h2>
+    <p class="method">Each point is one <code>solve()</code> on generated data, timed
+    in a fresh process so a run that overruns can be killed — CLP(FD) labeling does
+    not reliably yield to Prolog's own timeout. Prices rotate per item so the optimum
+    is a real choice rather than a tie. Capacity is set to demand, so it never binds.
+    Timeout 550s per solve.</p>
+    <p class="method">Reproduce with <code>python scripts/benchmark.py</code>, then
+    <code>python scripts/make_chart.py</code>.</p>
+  </section>
+</div>
+</div>
+
+<div class="tip" id="tip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+  function show(el) {
+    // textContent, never innerHTML concatenation — values are data.
+    tip.textContent = '';
+    var b = document.createElement('b');
+    b.textContent = Number(el.dataset.y).toFixed(2) + 's';
+    var s = document.createElement('span');
+    s.textContent = '  at ' + el.dataset.x + ' ' + el.dataset.var;
+    tip.appendChild(b); tip.appendChild(s);
+    var r = el.getBoundingClientRect();
+    tip.style.opacity = '1';
+    var tw = tip.offsetWidth;
+    var left = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2),
+                        window.innerWidth - tw - 8);
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(8, r.top - tip.offsetHeight - 10) + 'px';
+  }
+  function hide() { tip.style.opacity = '0'; }
+  document.querySelectorAll('.hit').forEach(function (el) {
+    el.addEventListener('pointerenter', function () { show(el); });
+    el.addEventListener('pointerleave', hide);
+    el.addEventListener('focus', function () { show(el); });
+    el.addEventListener('blur', hide);
+  });
+})();
+</script>

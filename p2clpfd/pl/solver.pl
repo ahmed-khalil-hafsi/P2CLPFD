@@ -321,14 +321,52 @@ supplier_part_constraints(Part, Supplier, Demand, Q, CostC, AuxVars) :-
     ;   100 * Q #=< MaxPct * Demand
     ),
 
+    % --- share granularity (award on a percentage grid) ----------------
+    share_grid(Part, Demand, Q, GridVars),
+
     % --- cost contribution (tiered or flat) ----------------------------
     (   has_tiers(Supplier, Part)
     ->  tiered_pricing(Supplier, Part, Q, CostC, TierVar),
-        AuxVars = [TierVar]
+        append(GridVars, [TierVar], AuxVars)
     ;   effective_unit_cost(Supplier, Part, _, EffCost),
         CostC #= Q * EffCost,
-        AuxVars = []
+        AuxVars = GridVars
     ).
+
+%! share_grid(+Part, +Demand, +Q, -GridVars) is det.
+%
+%  Restricts an award to whole increments of the part's demand — the way
+%  awards are actually written ("60/30/10", never "37.13%").
+%
+%  The point is not the restriction, it is WHAT GETS SEARCHED. Without a
+%  grid, Q ranges over 0..Demand, so the space branch-and-bound must cover
+%  to prove optimality grows with the order quantity. On a 5% grid there
+%  are only 21 possible levels no matter how large Demand is, and it is
+%  the LEVEL that carries the search: Q is then fixed by arithmetic.
+%  Solve time stops depending on quantity altogether.
+%
+%  Levels whose quantity is not a whole number are simply absent from
+%  Level's domain, which the linear relation below enforces on its own —
+%  100 * Q #= Level * Pct * Demand has no solution for a Level that would
+%  need a fractional Q. So the model never invents an unachievable split.
+%
+share_grid(Part, Demand, Q, GridVars) :-
+    (   share_increment_of(Part, Pct),
+        Pct > 0,
+        Demand > 0
+    ->  Levels is 100 // Pct,
+        Level in 0..Levels,
+        100 * Q #= Level * Pct * Demand,
+        GridVars = [Level]
+    ;   GridVars = []
+    ).
+
+%! share_increment_of(+Part, -Pct) is semidet.
+%  Per-part increment wins over the global one; absent means no grid.
+share_increment_of(Part, Pct) :-
+    share_increment(Part, Pct), !.
+share_increment_of(_, Pct) :-
+    share_increment(Pct).
 
 %! tiered_pricing(+Supplier, +Part, +Q, -CostC, -TierVar).
 %

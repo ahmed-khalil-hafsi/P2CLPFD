@@ -1,0 +1,245 @@
+{
+  "config": {
+    "suppliers": 4,
+    "min_suppliers": 4,
+    "min_share_pct": 5,
+    "fixed_demand": 20,
+    "global_share_cap": 40,
+    "share_increment": 5,
+    "timeout": 550.0
+  },
+  "results": {
+    "items": [
+      {
+        "items": 100,
+        "demand": 20,
+        "increment": null,
+        "seconds": 11.4661,
+        "tco": 208710,
+        "timed_out": false
+      },
+      {
+        "items": 250,
+        "demand": 20,
+        "increment": null,
+        "seconds": 28.8271,
+        "tco": 521985,
+        "timed_out": false
+      },
+      {
+        "items": 500,
+        "demand": 20,
+        "increment": null,
+        "seconds": 55.5758,
+        "tco": 1044150,
+        "timed_out": false
+      },
+      {
+        "items": 750,
+        "demand": 20,
+        "increment": null,
+        "seconds": 83.5169,
+        "tco": 1566225,
+        "timed_out": false
+      },
+      {
+        "items": 1000,
+        "demand": 20,
+        "increment": null,
+        "seconds": 113.4076,
+        "tco": 2088345,
+        "timed_out": false
+      },
+      {
+        "items": 1500,
+        "demand": 20,
+        "increment": null,
+        "seconds": 177.6034,
+        "tco": 3132585,
+        "timed_out": false
+      },
+      {
+        "items": 2000,
+        "demand": 20,
+        "increment": null,
+        "seconds": 223.226,
+        "tco": 4176975,
+        "timed_out": false
+      },
+      {
+        "items": 2500,
+        "demand": 20,
+        "increment": null,
+        "seconds": 292.8588,
+        "tco": 5221245,
+        "timed_out": false
+      },
+      {
+        "items": 3000,
+        "demand": 20,
+        "increment": null,
+        "seconds": 313.5783,
+        "tco": 6265425,
+        "timed_out": false
+      }
+    ],
+    "demand": [
+      {
+        "items": 1,
+        "demand": 10,
+        "increment": null,
+        "seconds": 0.028,
+        "tco": 1042,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 20,
+        "increment": null,
+        "seconds": 0.1374,
+        "tco": 2042,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 40,
+        "increment": null,
+        "seconds": 0.4658,
+        "tco": 4084,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 80,
+        "increment": null,
+        "seconds": 1.6222,
+        "tco": 8168,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 120,
+        "increment": null,
+        "seconds": 3.3841,
+        "tco": 12252,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 160,
+        "increment": null,
+        "seconds": 5.8375,
+        "tco": 16336,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 200,
+        "increment": null,
+        "seconds": 9.016,
+        "tco": 20420,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 300,
+        "increment": null,
+        "seconds": 20.1717,
+        "tco": 30630,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 400,
+        "increment": null,
+        "seconds": 37.3124,
+        "tco": 40840,
+        "timed_out": false
+      }
+    ],
+    "demand_grid": [
+      {
+        "items": 1,
+        "demand": 10,
+        "increment": 5,
+        "seconds": 0.0464,
+        "tco": 1042,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 20,
+        "increment": 5,
+        "seconds": 0.1467,
+        "tco": 2042,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 40,
+        "increment": 5,
+        "seconds": 0.301,
+        "tco": 4084,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 80,
+        "increment": 5,
+        "seconds": 0.2993,
+        "tco": 8168,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 200,
+        "increment": 5,
+        "seconds": 0.3077,
+        "tco": 20420,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 400,
+        "increment": 5,
+        "seconds": 0.3107,
+        "tco": 40840,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 1000,
+        "increment": 5,
+        "seconds": 0.3215,
+        "tco": 102100,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 5000,
+        "increment": 5,
+        "seconds": 0.3149,
+        "tco": 510500,
+        "timed_out": false
+      },
+      {
+        "items": 1,
+        "demand": 20000,
+        "increment": 5,
+        "seconds": 0.3168,
+        "tco": 2042000,
+        "timed_out": false
+      }
+    ],
+    "coupled": [
+      {
+        "items": 100,
+        "demand": 20,
+        "seconds": null,
+        "increment": null,
+        "timed_out": true,
+        "timeout": 550.0
+      }
+    ]
+  }
+}

@@ -30,6 +30,8 @@
 :- dynamic region/2.
 :- dynamic fx_rate/2.
 :- dynamic logistics_cost/2.
+:- dynamic share_increment/1.
+:- dynamic share_increment/2.
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%
@@ -62,7 +64,9 @@ clear :-
     retractall(logistics_cost(_,_)),
     retractall(supplier_route(_,_)),
     retractall(route_capacity(_,_)),
-    retractall(max_route_share(_,_)).
+    retractall(max_route_share(_,_)),
+    retractall(share_increment(_)),
+    retractall(share_increment(_,_)).
 
 setup_minimal :-
     clear,
@@ -337,6 +341,91 @@ test(slack_global_capacity_stays_separable) :-
     TCO =:= 1000.
 
 :- end_tests(decomposition).
+
+%% ------------------------------------------------------------------ %%
+
+:- begin_tests(share_increment).
+
+% A 5% grid means every award is a whole multiple of 5% of demand. It is
+% how awards are actually written, and it decouples solve time from order
+% quantity: the search runs over ~21 levels instead of ~demand values.
+
+setup_grid :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:cost(alpha, p1, 10)),
+    assert(user:cost(beta, p1, 12)),
+    assert(user:cost(gamma, p1, 15)).
+
+test(award_lands_on_the_grid) :-
+    setup_grid,
+    assert(user:capacity(alpha, p1, 37)),      % free optimum would be 37
+    assert(user:share_increment(5)),
+    solve(A, _), !,
+    member(alloc(p1, Qs), A),
+    forall(( member(q(_, Q), Qs) ), 0 =:= Q mod 5).
+
+test(grid_costs_a_little_when_optimum_is_off_grid) :-
+    setup_grid,
+    assert(user:capacity(alpha, p1, 37)),
+    solve(_, FreeTCO), !,
+    assert(user:share_increment(5)),
+    solve(_, GridTCO), !,
+    FreeTCO =:= 1126,                          % alpha 37 + beta 63
+    GridTCO =:= 1130,                          % alpha 35 + beta 65
+    GridTCO > FreeTCO.
+
+test(grid_is_free_when_optimum_already_lands_on_it) :-
+    setup_grid,
+    solve(_, FreeTCO), !,
+    assert(user:share_increment(5)),
+    solve(_, GridTCO), !,
+    GridTCO =:= FreeTCO.
+
+test(per_part_increment_beats_global) :-
+    setup_grid,
+    assert(user:demand(p2, 100)),
+    assert(user:cost(alpha, p2, 10)),
+    assert(user:share_increment(50)),          % global: coarse
+    assert(user:share_increment(p1, 5)),       % p1: fine
+    assert(user:capacity(alpha, p1, 37)),
+    solve(A, _), !,
+    member(alloc(p1, Qs), A),
+    member(q(alpha, QA), Qs),
+    QA =:= 35.                                 % 5% grid, not the 50% one
+
+test(unreachable_levels_are_excluded_not_rounded) :-
+    % 5% of 30 is 1.5 units, so only even levels are achievable. The
+    % solver must pick a reachable split, never invent a fractional one.
+    user:clear,
+    assert(user:demand(p1, 30)),
+    assert(user:cost(alpha, p1, 10)),
+    assert(user:cost(beta, p1, 12)),
+    assert(user:share_increment(5)),
+    solve(A, TCO), !,
+    member(alloc(p1, Qs), A),
+    sum_qs(Qs, 30),                            % demand still exactly met
+    TCO =:= 300.
+
+test(no_increment_leaves_the_model_alone) :-
+    setup_grid,
+    assert(user:capacity(alpha, p1, 37)),
+    solve(A, TCO), !,
+    member(alloc(p1, Qs), A),
+    member(q(alpha, 37), Qs),                  % free to use all 37
+    TCO =:= 1126.
+
+test(grid_respects_share_floors) :-
+    setup_grid,
+    assert(user:share(p1, beta, 5, 100)),
+    assert(user:share_increment(5)),
+    solve(A, _), !,
+    member(alloc(p1, Qs), A),
+    member(q(beta, QB), Qs),
+    QB >= 5,
+    0 =:= QB mod 5.
+
+:- end_tests(share_increment).
 
 %% ------------------------------------------------------------------ %%
 

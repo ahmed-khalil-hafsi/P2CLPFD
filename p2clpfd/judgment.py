@@ -35,6 +35,7 @@ from typing import Any, Optional
 # a category manager would argue about; keeping them named and together
 # makes that argument easy to have.
 
+SLOW_SOLVE_SECONDS = 5.0      # past this, suggest an award grid
 SINGLE_SOURCE_SHARE = 100.0   # % of a part from one supplier = single-sourced
 HIGH_CONCENTRATION = 60.0     # % of total spend with one supplier = concentrated
 REBATE_NEAR_MISS = 0.15       # within 15% of a rebate threshold is worth chasing
@@ -333,6 +334,50 @@ def assess_rebate_proximity(solution: dict, rebates: list[dict]) -> list[Finding
     return findings
 
 
+def assess_award_granularity(
+    solve_seconds: Optional[float], has_increment: bool
+) -> list[Finding]:
+    """
+    Offer the award grid when a slow solve has no granularity set.
+
+    Quantities are free by default, so the solver must prove no better
+    split exists across every whole unit — work that grows with the order
+    quantity. Restricting awards to whole percentage steps collapses that
+    to a couple of dozen options and makes solve time independent of
+    quantity. Most buyers award in round numbers anyway, so the
+    restriction usually costs nothing.
+
+    Only raised when the solve was actually slow: telling someone to
+    change their model when it already answers instantly is noise.
+    """
+    if has_increment or solve_seconds is None:
+        return []
+    if solve_seconds < SLOW_SOLVE_SECONDS:
+        return []
+
+    return [Finding(
+        kind="suggest_award_grid",
+        severity="opportunity",
+        say_to_user=(
+            f"That took {solve_seconds:.0f} seconds because awards can be any "
+            f"quantity at all. If you are willing to award in round steps — "
+            f"5% at a time, so splits look like 60/30/10 — it will run almost "
+            f"instantly, and usually for the same money."
+        ),
+        detail={
+            "solve_seconds": round(solve_seconds, 2),
+            "setting": "share_increment",
+            "suggested_pct": 5,
+            "usable_steps": [1, 2, 4, 5, 10, 20, 25, 50],
+            "caveat": (
+                "Costs a little when the best split falls between steps, "
+                "and minimum order quantities and price breaks do not "
+                "follow the steps."
+            ),
+        },
+    )]
+
+
 def assess_exclusions(disqualified: list[dict]) -> list[Finding]:
     """
     Surface suppliers the gates removed.
@@ -369,6 +414,8 @@ def advise(
     sensitivity: Optional[dict] = None,
     disqualified: Optional[list[dict]] = None,
     rebates: Optional[list[dict]] = None,
+    solve_seconds: Optional[float] = None,
+    has_increment: bool = False,
 ) -> dict:
     """
     Produce the full reading of one sourcing decision.
@@ -379,6 +426,9 @@ def advise(
         sensitivity:  Solver.sensitivity() output, if it was run.
         disqualified: Solver.disqualified() output.
         rebates:      [{supplier, threshold, pct}, ...] in effect.
+        solve_seconds: How long the solve took, so a slow one can be
+                      offered the award-grid shortcut.
+        has_increment: Whether an award grid is already configured.
 
     Returns:
         {
@@ -404,6 +454,7 @@ def advise(
     findings.extend(assess_concentration(solution))
     findings.extend(assess_rebate_proximity(solution, rebates or []))
     findings.extend(assess_exclusions(disqualified or []))
+    findings.extend(assess_award_granularity(solve_seconds, has_increment))
     if sensitivity:
         findings.extend(assess_negotiation_levers(sensitivity))
 

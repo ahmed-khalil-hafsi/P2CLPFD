@@ -1052,6 +1052,11 @@ validation_issue(capacity_below_demand(P, TotalCap, Demand)) :-
     sum_list(Caps, TotalCap),
     TotalCap < Demand.
 
+% --- award grid ---
+validation_issue(share_increment_not_a_divisor(Pct)) :-
+    increment_in_use(Pct),
+    0 =\= 100 mod Pct.
+
 % --- qualification gates ---
 validation_issue(all_suppliers_disqualified(P)) :-
     parts(Parts),
@@ -1095,6 +1100,13 @@ constrained_pair(S, P) :-
     sort(Pairs0, Pairs),
     member(S-P, Pairs).
 
+%! increment_in_use(-Pct) is nondet.
+%  Every award-grid setting in play, global or per part.
+increment_in_use(Pct) :-
+    findall(P, ( share_increment(P) ; share_increment(_, P) ), Ps0),
+    sort(Ps0, Ps),
+    member(Pct, Ps).
+
 all_capped([], _).
 all_capped([S|Ss], P) :-
     capacity(S, P, _),
@@ -1114,6 +1126,7 @@ issue_severity(share_min_over_max(_, _, _, _),     error).
 issue_severity(share_minimums_exceed_demand(_, _), error).
 issue_severity(share_maximums_below_demand(_, _),  error).
 issue_severity(capacity_below_demand(_, _, _),     error).
+issue_severity(share_increment_not_a_divisor(_),   error).
 issue_severity(all_suppliers_disqualified(_),      error).
 issue_severity(supplier_disqualified(_, _, _),     info).
 
@@ -1159,6 +1172,11 @@ issue_message(capacity_below_demand(P, TotalCap, Demand), Msg) :-
     format(atom(Msg),
            'Qualified suppliers for ~w can supply ~w units in total but ~w are needed.',
            [P, TotalCap, Demand]).
+issue_message(share_increment_not_a_divisor(Pct), Msg) :-
+    suggest_divisor(Pct, Better),
+    format(atom(Msg),
+           'Awards are set to ~w% steps, but 100 does not divide by ~w, so the shares can never add up to the full quantity. Use ~w% instead.',
+           [Pct, Pct, Better]).
 issue_message(all_suppliers_disqualified(P), Msg) :-
     format(atom(Msg),
            'Every supplier for ~w fails your qualification rules, so ~w cannot be sourced at all.',
@@ -1168,6 +1186,14 @@ issue_message(supplier_disqualified(P, S, Reasons), Msg) :-
     format(atom(Msg),
            'Supplier ~w is excluded from ~w: ~w.',
            [S, P, Phrase]).
+
+%! suggest_divisor(+Pct, -Better) is det.
+%  Nearest usable step size, so the message ends with a fix rather than
+%  just a complaint.
+suggest_divisor(Pct, Better) :-
+    findall(D, ( member(D, [1,2,4,5,10,20,25,50]), 0 =:= 100 mod D ), Ds),
+    findall(Dist-D, ( member(D, Ds), Dist is abs(D - Pct) ), Pairs),
+    keysort(Pairs, [_-Better|_]).
 
 %! reasons_phrase(+Reasons, -Phrase) is det.
 reasons_phrase([R], Phrase) :- !, reason_phrase(R, Phrase).

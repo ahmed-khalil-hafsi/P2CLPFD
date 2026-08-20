@@ -12,6 +12,7 @@ import unittest
 
 from p2clpfd.judgment import (
     advise,
+    assess_award_granularity,
     assess_concentration,
     assess_data_quality,
     assess_negotiation_levers,
@@ -200,6 +201,29 @@ class TestRebateProximity(unittest.TestCase):
         sol = _solution(1000, [_part("p1", [_supplier("b", 100, 1000)])])
         rebates = [{"supplier": "a", "threshold": 100, "pct": 5}]
         self.assertEqual(assess_rebate_proximity(sol, rebates), [])
+
+
+class TestAwardGranularity(unittest.TestCase):
+    def test_slow_solve_without_a_grid_gets_the_offer(self):
+        findings = assess_award_granularity(12.0, has_increment=False)
+        self.assertEqual(findings[0].kind, "suggest_award_grid")
+        self.assertEqual(findings[0].detail["suggested_pct"], 5)
+
+    def test_fast_solve_is_left_alone(self):
+        # Telling someone to change a model that already answers instantly
+        # is noise, not advice.
+        self.assertEqual(assess_award_granularity(0.4, has_increment=False), [])
+
+    def test_existing_grid_is_not_re_offered(self):
+        self.assertEqual(assess_award_granularity(30.0, has_increment=True), [])
+
+    def test_unknown_timing_says_nothing(self):
+        self.assertEqual(assess_award_granularity(None, has_increment=False), [])
+
+    def test_offer_states_the_trade_off(self):
+        finding = assess_award_granularity(12.0, has_increment=False)[0]
+        self.assertIn("caveat", finding.detail)
+        self.assertTrue(all(100 % s == 0 for s in finding.detail["usable_steps"]))
 
 
 class TestExclusions(unittest.TestCase):

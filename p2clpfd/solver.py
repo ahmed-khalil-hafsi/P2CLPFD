@@ -308,10 +308,13 @@ class Solver:
             Dict with "verdict", "findings", and "tco". See
             p2clpfd.judgment.advise for the finding schema.
         """
+        import time
         from .judgment import advise as _advise
 
         validation = self.validate()
+        started = time.perf_counter()
         solution = self.solve()
+        solve_seconds = time.perf_counter() - started
         sensitivity = self.sensitivity(sensitivity_step) if solution else None
         return _advise(
             solution=solution,
@@ -319,7 +322,44 @@ class Solver:
             sensitivity=sensitivity,
             disqualified=self.disqualified(),
             rebates=self.rebates(),
+            solve_seconds=solve_seconds,
+            has_increment=self.has_award_grid(),
         )
+
+    def solve_with_grid(self, increment_pct: int) -> Optional[dict]:
+        """
+        Solve with awards restricted to whole increment_pct% steps.
+
+        The grid is applied for this call only and then removed, so it
+        never leaks into a later solve on the same loaded data.
+
+        Args:
+            increment_pct: Award step as a percent of each part's demand.
+                Must divide 100, or no split can total the full quantity.
+
+        Returns:
+            Same shape as solve(), or None when no award fits the grid.
+        """
+        if 100 % increment_pct != 0:
+            raise ValueError(
+                f"award step must divide 100; {increment_pct} does not"
+            )
+        janus.query_once(
+            'retractall(share_increment(_)), assertz(share_increment(Pct))',
+            {'Pct': increment_pct}
+        )
+        try:
+            return self.solve()
+        finally:
+            janus.query_once('retractall(share_increment(_))')
+
+    def has_award_grid(self) -> bool:
+        """Whether awards are restricted to a percentage grid."""
+        result = janus.query_once(
+            '( share_increment(_) ; share_increment(_, _) ) -> '
+            'Found = true ; Found = false'
+        )
+        return result.get("Found") == "true"
 
     def solve_trace(self, max_cost: Optional[int] = None) -> dict:
         """

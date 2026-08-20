@@ -45,7 +45,9 @@ TOOLS = [
             "one-line verdict plus ranked findings, each with a 'say_to_user' "
             "sentence already written in plain procurement language — quote those "
             "rather than describing the numbers yourself. If the model is "
-            "infeasible this explains WHICH rule to relax instead of just saying no."
+            "infeasible this explains WHICH rule to relax instead of just saying no. "
+            "If a solve is slow, this will also tell you so and suggest the award "
+            "grid described under set_award_grid."
         ),
         "inputSchema": {
             "type": "object",
@@ -200,6 +202,53 @@ TOOLS = [
         },
     },
     {
+        "name": "set_award_grid",
+        "description": (
+            "Restrict awards to round percentage steps — 5 means every supplier "
+            "gets a multiple of 5% of the item, so splits look like 60/30/10 "
+            "rather than 37.13%. Re-solves and reports what changed.\n\n"
+            "WHEN TO OFFER THIS: a solve is slow, or the quantities per item are "
+            "large (hundreds or thousands of units). Without a grid the solver "
+            "must weigh every single unit, and that work grows with the order "
+            "quantity — a large item can take minutes. With a 5% grid there are "
+            "only 21 possible splits regardless of quantity, so it returns almost "
+            "instantly. Measured: 400 units went from 37s to 0.31s; 20,000 units "
+            "from 'did not finish' to 0.32s.\n\n"
+            "TELL THE USER THE TRADE. It is a different question, not a faster "
+            "route to the same answer: when the best split falls between steps "
+            "the award costs slightly more (about 0.4% in testing), and minimum "
+            "order quantities and price breaks do not follow the steps. Most "
+            "buyers award in round numbers anyway, so it usually costs nothing — "
+            "but say so rather than switching it on silently.\n\n"
+            "Step size must divide 100: use 1, 2, 4, 5, 10, 20, 25 or 50. A step "
+            "like 3 or 7 makes the model impossible, because the shares can never "
+            "add up to the whole quantity."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "csv_path": _CSV_ARG,
+                "increment_pct": {
+                    "type": "integer",
+                    "description": (
+                        "Award step as a percentage of each item's quantity. "
+                        "5 is the usual choice. Must divide 100."
+                    ),
+                },
+                "compare": {
+                    "type": "boolean",
+                    "description": (
+                        "Also solve without the grid and report the cost "
+                        "difference, so the user can see what the restriction "
+                        "costs before accepting it. Skip on a slow model — the "
+                        "unrestricted solve is the slow one."
+                    ),
+                },
+            },
+            "required": ["csv_path", "increment_pct"],
+        },
+    },
+    {
         "name": "solve_trace",
         "description": (
             "Return an NDJSON trace of the solver's internal search: how each "
@@ -312,6 +361,51 @@ def _tool_list_disqualified(args: dict) -> dict:
     return _text({"excluded": excluded})
 
 
+def _tool_set_award_grid(args: dict) -> dict:
+    pct = args.get("increment_pct")
+    if not isinstance(pct, int) or pct <= 0 or 100 % pct != 0:
+        return _error(
+            f"Award step must divide 100 — {pct} does not, so the shares could "
+            f"never add up to the whole quantity. Use 1, 2, 4, 5, 10, 20, 25 or 50."
+        )
+
+    solver = _loaded(args)
+    baseline = None
+    if args.get("compare"):
+        baseline = solver.solve()
+
+    result = solver.solve_with_grid(pct)
+    if result is None:
+        return _text({
+            "status": "infeasible",
+            "message": (
+                f"No award is possible on a {pct}% grid. A minimum order "
+                f"quantity or capacity limit probably cannot be met in whole "
+                f"{pct}% steps. Try a finer step, or drop the grid."
+            ),
+        })
+
+    payload = {"status": "ok", "increment_pct": pct, "tco": result["tco"],
+               "allocations": result["allocations"]}
+    if baseline:
+        extra = result["tco"] - baseline["tco"]
+        payload["comparison"] = {
+            "unrestricted_tco": baseline["tco"],
+            "grid_tco": result["tco"],
+            "extra_cost": extra,
+            "extra_cost_pct": round(extra * 100 / baseline["tco"], 3)
+                              if baseline["tco"] else 0,
+            "say_to_user": (
+                f"Rounding awards to {pct}% steps costs {extra:,} more "
+                f"({extra * 100 / baseline['tco']:.2f}%)."
+                if extra > 0 else
+                f"Rounding awards to {pct}% steps costs nothing — the best "
+                f"split already lands on the grid."
+            ),
+        }
+    return _text(payload)
+
+
 def _tool_solve_trace(args: dict) -> dict:
     solver = _loaded(args)
     return _text(solver.solve_trace(max_cost=args.get("max_cost"))["trace"])
@@ -325,6 +419,7 @@ _HANDLERS = {
     "compare_scenarios": _tool_compare_scenarios,
     "solve_multiperiod": _tool_solve_multiperiod,
     "list_disqualified": _tool_list_disqualified,
+    "set_award_grid": _tool_set_award_grid,
     "solve_trace": _tool_solve_trace,
 }
 

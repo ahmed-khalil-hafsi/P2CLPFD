@@ -285,6 +285,7 @@ cells mean "no constraint" (unlimited / 0 / unrestricted).
 | `moq` | no | Minimum order quantity |
 | `share_min` | no | Min % of part demand this supplier must win |
 | `share_max` | no | Max % of part demand this supplier may win |
+| `share_increment` | no | Award granularity, % of demand (5 = 60/30/10 splits) |
 | `noncost_adj` | no | Per-unit TCO adjustment (±) |
 | `fixed_cost` | no | One-time charge when awarded |
 | `min_suppliers` | no | Part must have at least N suppliers |
@@ -353,10 +354,47 @@ share bounds that cannot sum to demand, capacity below demand, and suppliers
 removed by qualification gates. Status is `error` (the answer would be wrong or
 impossible), `warning` (looks unintended), or `ok`.
 
+## Performance
+
+**Catalogue size is not the limit — order quantity is.**
+
+Nothing in an ordinary constraint set (capacity, MOQ, shares, supplier
+counts) ties one item to another, so the solver proves each item optimal on
+its own and cost grows **linearly** with the number of items. Ten times the
+catalogue costs ten times the time.
+
+Quantity is the expensive axis. CLP(FD) searches over integer quantities, so
+the units per item set how big a space branch-and-bound must cover to *prove*
+optimality — growth is **near-quadratic**. Ten times the quantity costs far
+more than ten times the time.
+
+**`share_increment` removes that axis.** Restrict awards to whole multiples of
+5% of demand — the way awards are actually written — and there are only 21
+possible levels no matter how large the quantity. The level carries the search;
+the quantity follows by arithmetic. Solve time goes flat:
+
+| units per item | free quantities | 5% grid |
+|---|---|---|
+| 200 | 9.0s | **0.31s** |
+| 400 | 37.3s | **0.31s** |
+| 20,000 | did not finish | **0.32s** |
+
+It costs about 0.36% when the true optimum falls off the grid, and MOQs and
+price breaks don't respect it — so it's a real trade, just usually a good one.
+
+A portfolio-wide rule (a global share cap, a rebate, a route ceiling) welds
+every item into one search, because minimizing a sum couples everything the
+sum touches. `decompose.pl` splits what it can — independent items, and each
+rebate's earned/not-earned branch — but a share cap or route ceiling still
+forces the monolithic path.
+
+Measurements, method, and what was ruled out: [benchmarks/](benchmarks/).
+
 ## Documentation
 
 - [INSTALL.md](INSTALL.md) — installation (macOS, Linux, Conda, Docker)
 - [TECHNICAL.md](TECHNICAL.md) — architecture, constraint modeling deep dive, full API reference
+- [benchmarks/](benchmarks/) — scaling benchmark and where the time goes
 
 ## License
 

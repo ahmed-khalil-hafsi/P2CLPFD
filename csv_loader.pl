@@ -88,6 +88,8 @@
 :- dynamic supplier_route/2.
 :- dynamic route_capacity/2.
 :- dynamic max_route_share/2.
+:- dynamic share_increment/1.
+:- dynamic share_increment/2.
 
 %% ------------------------------------------------------------------ %%
 %%  PUBLIC API                                                         %%
@@ -183,7 +185,9 @@ retract_all_facts :-
     retractall(holding_cost(_, _)),
     retractall(supplier_route(_, _)),
     retractall(route_capacity(_, _)),
-    retractall(max_route_share(_, _)).
+    retractall(max_route_share(_, _)),
+    retractall(share_increment(_)),
+    retractall(share_increment(_, _)).
 
 %% ------------------------------------------------------------------ %%
 %%  HELPERS                                                            %%
@@ -238,6 +242,7 @@ assert_row_facts(Pairs) :-
     assert_pair_fact(lead_time, lead_time(_, Part, _), Supplier-Part, Pairs),
     % Per-part facts
     assert_part_fact(max_lead_time, max_lead_time(Part, _), Part, Pairs),
+    assert_part_fact(share_increment, share_increment(Part, _), Part, Pairs),
     assert_required_certs_fact(Part, Pairs),
     % Per-supplier facts
     assert_supplier_fact(global_capacity, global_capacity(_, _), Supplier, Pairs),
@@ -333,6 +338,9 @@ assert_part_fact(CSVKey, Template, Part, Pairs) :-
     ;   Template = max_lead_time(Part, _)
     ->  retractall(max_lead_time(Part, _)),
         assert(max_lead_time(Part, Number))
+    ;   Template = share_increment(Part, _)
+    ->  retractall(share_increment(Part, _)),
+        assert(share_increment(Part, Number))
     ).
 assert_part_fact(_, _, _, _).
 

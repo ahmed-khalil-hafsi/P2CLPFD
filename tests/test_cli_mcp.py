@@ -261,6 +261,57 @@ class TestMCP(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertIn("not found", _tool_text(responses[1]).lower())
 
+    def test_award_grid_rounds_the_award(self):
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": TINY, "increment_pct": 10}),
+        ])
+        result = json.loads(_tool_text(responses[1]))
+        self.assertEqual(result["status"], "ok")
+        for part in result["allocations"]:
+            for s in part["suppliers"]:
+                # 10% of bolt(20)=2 and nut(15)=1.5 -> only even levels for nut
+                self.assertGreater(s["qty"], 0)
+
+    def test_award_grid_reports_what_the_rounding_costs(self):
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": TINY, "increment_pct": 10, "compare": True}),
+        ])
+        result = json.loads(_tool_text(responses[1]))
+        comp = result["comparison"]
+        self.assertEqual(comp["unrestricted_tco"], 367)
+        self.assertGreaterEqual(comp["extra_cost"], 0)
+        self.assertTrue(comp["say_to_user"])
+
+    def test_impossible_grid_explains_itself_rather_than_just_failing(self):
+        # 25% of nut's 15 units is 3.75, so only 0 or all-of-it lands on the
+        # grid — which collides with needing two suppliers.
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": TINY, "increment_pct": 25}),
+        ])
+        result = json.loads(_tool_text(responses[1]))
+        self.assertEqual(result["status"], "infeasible")
+        self.assertIn("finer step", result["message"])
+
+    def test_award_grid_rejects_a_step_that_cannot_divide_100(self):
+        # 3% can never sum to 100%, so the model would be quietly infeasible.
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": TINY, "increment_pct": 3}),
+        ])
+        self.assertTrue(responses[1]["result"]["isError"])
+        self.assertIn("divide 100", _tool_text(responses[1]))
+
+    def test_award_grid_does_not_leak_into_later_solves(self):
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": TINY, "increment_pct": 10}),
+            _tool_call(2, "solve_allocation", {"csv_path": TINY}),
+        ])
+        self.assertEqual(json.loads(_tool_text(responses[2]))["tco"], 367)
+
     def test_unknown_tool_is_an_error(self):
         responses = _mcp([_tool_call(1, "no_such_tool", {})])
         self.assertTrue(responses[1]["result"]["isError"])

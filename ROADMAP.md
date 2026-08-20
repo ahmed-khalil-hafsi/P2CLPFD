@@ -27,6 +27,8 @@ Living document of what's done and what's next.
 | — | Solver tracer (NDJSON trace + live WebSocket visualization) | ✓ |
 | — | Python package (`pip install p2clpfd`) | ✓ |
 | — | Problem decomposition (independent parts, rebate branch enumeration) | ✓ |
+| — | Share grid (`share_increment`) — decouples solve time from quantity | ✓ |
+| — | Scaling benchmark + chart (`scripts/benchmark.py`, `make_chart.py`) | ✓ |
 | — | Structured validation with plain-language findings | ✓ |
 | — | Test suite: 68 PlUnit + 26 judgment unit + CLI/MCP integration | ✓ |
 
@@ -72,6 +74,20 @@ supplier-count rules.
 
 Folding those in means either a much larger monolithic model or per-period
 decomposition with the coupling handled explicitly — the same problem as above.
+
+---
+
+### Make the share grid discoverable
+
+`share_increment` is the single biggest performance lever — it takes a solve
+from "cannot finish 400 units" to 0.32s at 20,000 — but a user only benefits
+if they know to set it. The [benchmark](benchmarks/) quantifies both the win
+and its cost (0.36% when the true optimum is off-grid).
+
+**Approach:** have the judgment layer notice when a model is slow *and* has no
+increment set, and say so — "awards here are unrestricted; if round-number
+splits are acceptable, a 5% grid would make this instant." Validation could
+also flag a per-item demand large enough that a solve will crawl.
 
 ---
 

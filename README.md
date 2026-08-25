@@ -31,45 +31,77 @@ small. Some want volume commitments for a discount. Some can't do more than 500 
 You need at least two suppliers on each part for risk. And nobody should get more than
 40% of the total spend.
 
-This is the allocation problem — and P2CLPFD solves it optimally.
+This is the allocation problem — and P2CLPFD solves it optimally. Give it your demand,
+your supplier quotes, and your business rules, and it returns the single cost-optimal
+award that satisfies every constraint. No heuristics, no approximations — the result is
+mathematically guaranteed to be the best.
 
-P2CLPFD is a **constraint-based optimization engine** for procurement. Give it your
-demand, your supplier quotes, and your business rules. It returns the single
-cost-optimal award that satisfies every constraint. No heuristics, no approximations —
-the result is mathematically guaranteed to be the best.
+## Why P2CLPFD — the award is defensible
 
-## What "CLPFD" means (and why you should care)
+Finding the cheapest legal award is the *easy* part. Any competent optimizer can do it,
+and a purpose-built solver can do it far faster (see [Performance](#performance) for how
+much speed we trade away). The hard part comes after: the award gets **contested** — by
+the suppliers who lost, by a stakeholder who wanted their incumbent, by legal, by an
+auditor a year later. Most optimizers hand you a number and leave you to defend it in a
+language nobody in the room speaks.
 
-**CLP(FD)** = **Constraint Logic Programming over Finite Domains**
+P2CLPFD is built for that second part. It doesn't just produce the award — it produces
+**the argument for it, in a buyer's language.** Three things make that possible.
 
-That sounds academic. Here's what it means for your award:
+### 1. The rules *are* the model
+
+Every constraint is a declarative rule you write down — `dual_source`, a share floor, a
+fixed tooling charge — not a formula you build or a matrix you assemble. What you wrote
+is what runs, so there is no modeling layer between your sourcing policy and the math
+where intent could get mistranslated. When you sign off on the award, you are signing
+off on rules you can actually read. (A spreadsheet can't express "at least two
+suppliers" or "only if awarded" at all.)
+
+### 2. You can watch it decide
+
+```bash
+p2clpfd trace quotes.csv
+```
+
+Each rule shows up as options being struck out — before capacity, supplier2 could take
+anything from 0 to 250 units; after the MOQ and the share floor, only 75 to 150 remain.
+When someone asks *"why couldn't supplier2 have more?"*, you show them the exact rule
+that closed the door, in order. Not a duality gap — a story a human can follow.
+
+Optimizers built for speed cannot do this: their internals are matrix algebra with no
+business meaning. This is the capability that is genuinely hard to replicate, and it is
+why the engine works the way it does.
+
+### 3. It reads its own output
+
+The cheapest legal award is a mathematical fact — and still not the question a buyer
+actually has. Is the data fit to decide on? Are you about to hand one supplier 76% of
+your spend? Which of a dozen constraints is the one worth a phone call? P2CLPFD answers
+those from its own result, each finding carrying a severity and the numbers behind it.
+See [The judgment layer](#the-judgment-layer).
+
+---
+
+**The trade, stated plainly.** Speed is where P2CLPFD loses. "Prove it *and* explain it
+to a human" is where it wins. That trade only makes sense for decisions that get
+questioned — high-stakes, audited, multi-stakeholder sourcing. For a fire-and-forget
+number, a faster solver is the right tool, and [benchmarks/](benchmarks/) says by how
+much.
+
+## How the optimum is found
+
+**CLP(FD)** = **Constraint Logic Programming over Finite Domains**. That sounds
+academic; here is what it means for your award.
 
 Think of it like Sudoku. A Sudoku solver doesn't try every possible combination — it
 uses constraints ("this row already has a 7", "this square must be ≤ 9") to eliminate
 impossible values until only the correct one remains. That's constraint propagation.
 
 P2CLPFD does the same for procurement: "supplier2 can't exceed 150 units of part1",
-"part1 must have at least 2 suppliers", "supplier2 must win 30-70% of part1". The
-solver propagates these constraints to eliminate impossible quantities, then searches
-what's left for the one with the lowest TCO.
-
-This is different from tools that guess and check. A heuristic might find a *good*
-solution. Constraint solving finds the *best* one — and proves it.
-
-**And you can watch it happen.** That is the part worth caring about:
-
-```bash
-p2clpfd trace quotes.csv
-```
-
-Each rule you added shows up as options being struck out — before capacity,
-supplier2 could take anything from 0 to 250 units; after the MOQ and the share
-floor, only 75 to 150 remain. When someone asks *"why couldn't supplier2 have
-more?"*, you can show them which rule closed the door, in order.
-
-Optimizers built for speed cannot do this — their internals are matrix
-algebra with no business meaning. The trade is real and it is documented:
-[benchmarks/](benchmarks/) measures how much speed that explainability costs.
+"part1 must have at least 2 suppliers", "supplier2 must win 30-70% of part1". The solver
+propagates these constraints to eliminate impossible quantities, then searches what's
+left for the one with the lowest TCO — and proves no cheaper legal award exists. A
+heuristic might find a *good* split; constraint solving finds the *best* one.
 
 ## Use cases
 

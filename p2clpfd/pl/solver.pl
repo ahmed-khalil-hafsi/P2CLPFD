@@ -35,7 +35,12 @@ solve_dispatch(Allocation, TCO) :-
     (   single_part_problem
     ->  solve_monolithic(Allocation, TCO)
     ;   parts_are_coupled
-    ->  solve_monolithic(Allocation, TCO)
+        %% A cross-part rule that does not actually bite costs nothing to
+        %% discover, and saves a monolithic search when it is slack.
+    ->  (   relaxation_happens_to_be_feasible(Allocation, TCO)
+        ->  true
+        ;   solve_monolithic(Allocation, TCO)
+        )
     ;   solve_decomposed(Allocation, TCO)
     ).
 

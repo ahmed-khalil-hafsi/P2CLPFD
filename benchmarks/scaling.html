@@ -230,13 +230,51 @@
     <div style="height:14px"></div>
   </section>
 
+
+  <section class="card">
+    <h2>The realistic setup: a portfolio cap plus an award grid</h2>
+    <p class="lede">No supplier above 30% of total
+    volume, awards on a 5% grid,
+    1,000 units per item. A portfolio cap ties every
+    item together on paper — but once the catalogue is large enough the cheapest
+    supplier varies from item to item, the cap stops binding, and the solver can
+    prove each item optimal on its own again. That makes it linear at about
+    209 ms per item, so roughly 1,542 items fits inside a
+    5-minute wait. Below about eight items it is a different story: with only a handful of items one supplier wins most of them, the cap really does bite, and the solve stalls — 2, 3, 5, 6 items exceeded the budget.</p>
+    <figure class="chart" id="capped">
+  
+  <svg viewBox="0 0 560 330" role="img"
+       aria-label="solve time (seconds) against items sourced" preserveAspectRatio="xMidYMid meet">
+    <line x1="62" y1="284.0" x2="534" y2="284.0" class="grid"/><line x1="62" y1="218.0" x2="534" y2="218.0" class="grid"/><line x1="62" y1="152.0" x2="534" y2="152.0" class="grid"/><line x1="62" y1="86.0" x2="534" y2="86.0" class="grid"/><line x1="62" y1="20.0" x2="534" y2="20.0" class="grid"/>
+    <line x1="62" y1="20" x2="62" y2="284" class="axis"/>
+    <line x1="62" y1="284" x2="534" y2="284" class="axis"/>
+    <text x="52" y="288.0" class="tick tick-y">0</text><text x="52" y="222.0" class="tick tick-y">200</text><text x="52" y="156.0" class="tick tick-y">400</text><text x="52" y="90.0" class="tick tick-y">600</text><text x="52" y="24.0" class="tick tick-y">800</text>
+    <text x="62.2" y="304" class="tick tick-x">1.0</text><text x="85.6" y="304" class="tick tick-x">100</text><text x="121.0" y="304" class="tick tick-x">250</text><text x="180.0" y="304" class="tick tick-x">500</text><text x="298.0" y="304" class="tick tick-x">1,000</text><text x="416.0" y="304" class="tick tick-x">1,500</text><text x="534.0" y="304" class="tick tick-x">2,000</text>
+    <path d="M62.2,283.9 L62.9,283.9 L63.9,283.6 L65.8,283.2 L73.8,281.5 L85.6,278.8 L121.0,271.4 L180.0,257.5 L298.0,231.0 L416.0,188.6 L534.0,146.3" class="line s2"/>
+    <circle cx="62.2" cy="283.9" r="4.5" class="dot s2"/><circle cx="62.9" cy="283.9" r="4.5" class="dot s2"/><circle cx="63.9" cy="283.6" r="4.5" class="dot s2"/><circle cx="65.8" cy="283.2" r="4.5" class="dot s2"/><circle cx="73.8" cy="281.5" r="4.5" class="dot s2"/><circle cx="85.6" cy="278.8" r="4.5" class="dot s2"/><circle cx="121.0" cy="271.4" r="4.5" class="dot s2"/><circle cx="180.0" cy="257.5" r="4.5" class="dot s2"/><circle cx="298.0" cy="231.0" r="4.5" class="dot s2"/><circle cx="416.0" cy="188.6" r="4.5" class="dot s2"/><circle cx="534.0" cy="146.3" r="4.5" class="dot s2"/>
+    <text x="524.0" y="134.3" class="end-label" text-anchor="end">417s</text>
+    <text class="axis-title-y" transform="translate(14,152.0) rotate(-90)">solve time (seconds)</text>
+    <text class="axis-title-x" x="298.0" y="324">items sourced</text>
+    <circle cx="62.2" cy="283.9" r="13" class="hit" tabindex="0" role="img" data-x="1.0" data-y="0.243" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 1.0 items: 0.243 seconds"/><circle cx="62.9" cy="283.9" r="13" class="hit" tabindex="0" role="img" data-x="4.0" data-y="0.419" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 4.0 items: 0.419 seconds"/><circle cx="63.9" cy="283.6" r="13" class="hit" tabindex="0" role="img" data-x="8.0" data-y="1.224" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 8.0 items: 1.224 seconds"/><circle cx="65.8" cy="283.2" r="13" class="hit" tabindex="0" role="img" data-x="16" data-y="2.434" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 16 items: 2.434 seconds"/><circle cx="73.8" cy="281.5" r="13" class="hit" tabindex="0" role="img" data-x="50" data-y="7.586" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 50 items: 7.586 seconds"/><circle cx="85.6" cy="278.8" r="13" class="hit" tabindex="0" role="img" data-x="100" data-y="15.886" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 100 items: 15.886 seconds"/><circle cx="121.0" cy="271.4" r="13" class="hit" tabindex="0" role="img" data-x="250" data-y="38.106" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 250 items: 38.106 seconds"/><circle cx="180.0" cy="257.5" r="13" class="hit" tabindex="0" role="img" data-x="500" data-y="80.238" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 500 items: 80.238 seconds"/><circle cx="298.0" cy="231.0" r="13" class="hit" tabindex="0" role="img" data-x="1,000" data-y="160.578" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 1,000 items: 160.578 seconds"/><circle cx="416.0" cy="188.6" r="13" class="hit" tabindex="0" role="img" data-x="1,500" data-y="289.166" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 1,500 items: 289.166 seconds"/><circle cx="534.0" cy="146.3" r="13" class="hit" tabindex="0" role="img" data-x="2,000" data-y="417.238" data-var="items" data-series="portfolio cap + grid" aria-label="portfolio cap + grid, 2,000 items: 417.238 seconds"/>
+  </svg>
+</figure>
+    <details><summary>Table view</summary>
+      <div class="table-scroll">
+      <table>
+  <caption>Solve time with a portfolio cap and a 5% award grid</caption>
+  <thead><tr><th>Size</th><th>Solve time</th><th>Per unit</th></tr></thead>
+  <tbody><tr><td>1</td><td>0.2s</td><td>243 ms/item</td></tr><tr><td>4</td><td>0.4s</td><td>105 ms/item</td></tr><tr><td>8</td><td>1.2s</td><td>153 ms/item</td></tr><tr><td>16</td><td>2.4s</td><td>152 ms/item</td></tr><tr><td>50</td><td>7.6s</td><td>152 ms/item</td></tr><tr><td>100</td><td>15.9s</td><td>159 ms/item</td></tr><tr><td>250</td><td>38.1s</td><td>152 ms/item</td></tr><tr><td>500</td><td>80.2s</td><td>160 ms/item</td></tr><tr><td>1,000</td><td>160.6s</td><td>161 ms/item</td></tr><tr><td>1,500</td><td>289.2s</td><td>193 ms/item</td></tr><tr><td>2,000</td><td>417.2s</td><td>209 ms/item</td></tr></tbody>
+</table>
+      </div>
+    </details>
+  </section>
   <section class="card">
     <h2>Method</h2>
     <p class="method">Each point is one <code>solve()</code> on generated data, timed
     in a fresh process so a run that overruns can be killed — CLP(FD) labeling does
     not reliably yield to Prolog's own timeout. Prices rotate per item so the optimum
     is a real choice rather than a tie. Capacity is set to demand, so it never binds.
-    Timeout 550s per solve.</p>
+    Timeout 520s per solve.</p>
     <p class="method">Reproduce with <code>python scripts/benchmark.py</code>, then
     <code>python scripts/make_chart.py</code>.</p>
   </section>

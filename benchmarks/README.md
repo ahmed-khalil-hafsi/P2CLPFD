@@ -77,6 +77,45 @@ Three plausible explanations the measurements do **not** support:
   45s. More constraints did not prune the search; they made proving
   optimality harder.
 
+## The realistic setup: portfolio cap + award grid
+
+The configuration most buyers actually run — 4 suppliers, quad sourcing, 5%
+minimum share, **no supplier above 30% of total volume**, awards on a 5%
+grid, 1,000 units per item:
+
+| items | solve time | per item |
+|---|---|---|
+| 1 | 0.2s | 243 ms |
+| 2, 3 | **stalls** | cap binds |
+| 4 | 0.4s | 105 ms |
+| 5, 6 | **stalls** | cap binds |
+| 8 | 1.2s | 153 ms |
+| 100 | 15.9s | 159 ms |
+| 1,000 | 160.6s | 161 ms |
+| 1,500 | 289.2s | 193 ms |
+| 2,000 | 417.2s | 209 ms |
+
+**Roughly 1,550 items is as far as a five-minute wait stretches.**
+
+The shape is counter-intuitive: it is fast at 1 item, stalls at 2-6, then is
+fast and near-linear from 8 upward. A portfolio cap ties every item together
+*on paper*, but whether it actually bites depends on how concentrated the
+award would otherwise be. With a handful of items one supplier wins most of
+them and blows through 30%; across a large catalogue the cheapest supplier
+varies item to item and the total lands near 25% on its own — under the cap,
+so it constrains nothing.
+
+`decompose.pl` exploits exactly that. It solves without the cross-part rules
+(fast, because the items separate), then checks whether the answer happens to
+satisfy them. Dropping a constraint can only lower the optimum, so if the
+relaxed answer obeys the cap it is optimal for the capped problem too. When
+the cap really does bite the check fails and it falls back to one big search
+— which is what the 2-6 item stalls are.
+
+Per-item cost drifts up gently at the top end (153 ms at 8 items, 209 ms at
+2,000), so the crossover is interpolated between the bracketing measurements
+rather than extrapolated from an average.
+
 ## The coupled case
 
 One portfolio-wide rule — a cap on any supplier's share of *total* volume —

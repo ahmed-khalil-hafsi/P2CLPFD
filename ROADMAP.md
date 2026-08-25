@@ -29,26 +29,34 @@ Living document of what's done and what's next.
 | — | Problem decomposition (independent parts, rebate branch enumeration) | ✓ |
 | — | Share grid (`share_increment`) — decouples solve time from quantity | ✓ |
 | — | Scaling benchmark + chart (`scripts/benchmark.py`, `make_chart.py`) | ✓ |
+| — | Slack-coupling shortcut — a cross-part rule that does not bite is free | ✓ |
 | — | Structured validation with plain-language findings | ✓ |
-| — | Test suite: 68 PlUnit + 26 judgment unit + CLI/MCP integration | ✓ |
+| — | Test suite: 79 PlUnit + 61 Python (judgment unit + CLI/MCP integration) | ✓ |
 
 ---
 
 ## Remaining roadmap
 
-### Split route-coupled problems
+### Split route-coupled problems when the rule actually bites
 
-`decompose.pl` solves independent parts separately, which turned an
-unfinished-after-60s two-part problem into 0.47s. But any constraint that spans
-parts — a route ceiling, a global share cap, a live rebate — forces the whole
-model back onto one monolithic search.
+Partly addressed: a cross-part rule that does NOT constrain the answer is now
+free, because the relaxed per-item solve is checked against it and accepted
+when it already complies. That is what makes a 30% portfolio cap scale to
+~1,550 items inside five minutes.
 
-Route constraints are the pressing case, because the Strait of Hormuz case study
-(`casestudy/`) is built entirely on them and is currently too slow to run.
+What remains is the case where the rule genuinely binds — a small catalogue
+where one supplier would win most of it, or a route ceiling below what the
+cheapest routing wants. Those still fall back to one monolithic search, and
+[the benchmark](benchmarks/) shows them stalling at a handful of items.
 
-**Approach:** a route ceiling couples parts only through a single scalar (the
-group total). Enumerate or bisect on that total, and for each fixed value the
-parts separate again — the same trick that made rebates tractable. Lagrangian
+Route ceilings are the pressing case, because the Strait of Hormuz case study
+(`casestudy/`) is built on them and a chokepoint limit is binding by
+construction — that is the whole point of the scenario, so the shortcut above
+will never rescue it.
+
+**Approach:** a route ceiling couples parts through a single scalar, the group
+total. Enumerate or bisect on that total and, for each fixed value, the parts
+separate again — the same trick that made rebates tractable. Lagrangian
 relaxation on the coupling constraint is the more general version.
 
 **Business value:** the geopolitical-risk case is the most interesting thing

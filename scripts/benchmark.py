@@ -59,10 +59,15 @@ DEFAULT_DEMAND_SIZES = [10, 20, 40, 80, 120, 160, 200, 300, 400]
 # The grid decouples time from quantity, so this sweep can go far further
 # than the free-quantity one — that contrast is the whole point.
 DEFAULT_GRID_DEMAND_SIZES = [10, 20, 40, 80, 200, 400, 1000, 5000, 20000]
+# The realistic configuration: a portfolio cap plus an award grid.
+CAPPED_SHARE_CAP = 30       # capped sweep: no supplier above this % of TOTAL
+CAPPED_DEMAND = 1000
+DEFAULT_CAPPED_SIZES = [1, 2, 4, 8, 16, 50, 100, 250, 500, 1000, 2000, 3000]
 
 
 def generate_csv(path: str, n_items: int, demand: int, coupled: bool,
-                 increment: int | None = None) -> None:
+                 increment: int | None = None,
+                 rotating_winner: bool = False) -> None:
     """
     Write a synthetic quote sheet.
 
@@ -81,15 +86,26 @@ def generate_csv(path: str, n_items: int, demand: int, coupled: bool,
         fh.write(",".join(header) + "\n")
         for i in range(n_items):
             for s, supplier in enumerate(SUPPLIERS):
+                # Which supplier is cheapest matters enormously when a
+                # portfolio cap is in play. Shifting every price by the
+                # item index (the default) leaves the SAME supplier
+                # cheapest throughout, so one supplier wins everything and
+                # the cap binds hard. Rotating the winner is the realistic
+                # case and lets the cap average out across a catalogue.
+                if rotating_winner:
+                    cost = 100 + ((s - i) % len(SUPPLIERS)) * 6 + ((i * 3) % 5)
+                else:
+                    cost = 100 + ((i + s * 7) % 23)
                 row = [
                     f"item{i}", supplier, str(demand),
-                    str(100 + ((i + s * 7) % 23)),
+                    str(cost),
                     str(demand),                   # capacity: not binding
                     str(MIN_SHARE_PCT),
                     str(len(SUPPLIERS)),           # quad sourcing
                 ]
                 if coupled:
-                    row.append(str(GLOBAL_SHARE_CAP))
+                    row.append(str(CAPPED_SHARE_CAP if rotating_winner
+                                   else GLOBAL_SHARE_CAP))
                 if increment:
                     row.append(str(increment))
                 fh.write(",".join(row) + "\n")
@@ -113,11 +129,12 @@ print(json.dumps({
 
 
 def run_one(n_items: int, demand: int, coupled: bool, timeout: float,
-            increment: int | None = None) -> dict:
+            increment: int | None = None,
+            rotating_winner: bool = False) -> dict:
     fd, path = tempfile.mkstemp(suffix=".csv", prefix="p2bench_")
     os.close(fd)
     try:
-        generate_csv(path, n_items, demand, coupled, increment)
+        generate_csv(path, n_items, demand, coupled, increment, rotating_winner)
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", _RUNNER, path],
@@ -144,18 +161,26 @@ def run_one(n_items: int, demand: int, coupled: bool, timeout: float,
 
 def sweep(label: str, cases: list[tuple[int, int]], coupled: bool,
           timeout: float, per_unit: str,
-          increment: int | None = None) -> list[dict]:
+          increment: int | None = None,
+          rotating_winner: bool = False,
+          stop_on_timeout: bool = True) -> list[dict]:
     print(f"\n{label}")
     print(f"  {'items':>6} {'demand':>7} {'seconds':>10}  {per_unit}")
     records = []
     for n_items, demand in cases:
-        record = run_one(n_items, demand, coupled, timeout, increment)
+        record = run_one(n_items, demand, coupled, timeout, increment,
+                         rotating_winner)
         records.append(record)
 
         if record.get("timed_out"):
             print(f"  {n_items:>6} {demand:>7} {'>' + str(int(timeout)) + 's':>10}"
-                  "   gave up — larger sizes cannot be faster")
-            break
+                  "   gave up")
+            # With a portfolio cap, slow does NOT imply slower forever:
+            # the cap stops binding once the catalogue is big enough to
+            # average out, so keep going.
+            if stop_on_timeout:
+                break
+            continue
         if record.get("error"):
             print(f"  {n_items:>6} {demand:>7}      ERROR {record['error'][:80]}")
             break
@@ -170,8 +195,8 @@ def sweep(label: str, cases: list[tuple[int, int]], coupled: bool,
 def main() -> int:
     parser = argparse.ArgumentParser(description="P2CLPFD scaling benchmark")
     parser.add_argument("--sweep",
-                        choices=["items", "demand", "grid", "coupled",
-                                 "both", "all"],
+                        choices=["items", "demand", "grid", "capped",
+                                 "coupled", "both", "all"],
                         default="all")
     parser.add_argument("--sizes", type=int, nargs="+")
     parser.add_argument("--timeout", type=float, default=120.0)
@@ -186,7 +211,7 @@ def main() -> int:
 
     wanted = {
         "items": ["items"], "demand": ["demand"], "grid": ["grid"],
-        "coupled": ["coupled"],
+        "capped": ["capped"], "coupled": ["coupled"],
         "both": ["items", "demand"],
         "all": ["items", "demand", "grid", "coupled"],
     }[args.sweep]
@@ -208,6 +233,14 @@ def main() -> int:
             f"demand sweep on a {SHARE_INCREMENT}% award grid ({FIXED_ITEMS} item)",
             [(FIXED_ITEMS, d) for d in sizes], False, args.timeout, "ms/unit",
             increment=SHARE_INCREMENT)
+    if "capped" in wanted:
+        sizes = args.sizes or DEFAULT_CAPPED_SIZES
+        results["capped"] = sweep(
+            f"portfolio cap {CAPPED_SHARE_CAP}% + {SHARE_INCREMENT}% grid, "
+            f"{CAPPED_DEMAND} units/item, rotating winner",
+            [(n, CAPPED_DEMAND) for n in sizes], True, args.timeout, "ms/item",
+            increment=SHARE_INCREMENT, rotating_winner=True,
+            stop_on_timeout=False)
     if "coupled" in wanted:
         sizes = args.sizes or DEFAULT_ITEM_SIZES
         results["coupled"] = sweep(
@@ -221,6 +254,8 @@ def main() -> int:
             "min_share_pct": MIN_SHARE_PCT,
             "fixed_demand": FIXED_DEMAND,
             "global_share_cap": GLOBAL_SHARE_CAP,
+            "capped_share_cap": CAPPED_SHARE_CAP,
+            "capped_demand": CAPPED_DEMAND,
             "share_increment": SHARE_INCREMENT,
             "timeout": args.timeout,
         },

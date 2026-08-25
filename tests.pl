@@ -429,6 +429,70 @@ test(grid_respects_share_floors) :-
 
 %% ------------------------------------------------------------------ %%
 
+:- begin_tests(slack_coupling).
+
+% A cross-part rule that does not actually bite must not force the slow
+% monolithic path. Dropping a constraint can only lower the optimum, so
+% if the decomposed answer satisfies the rule anyway it IS optimal.
+
+test(slack_global_share_cap_matches_monolithic) :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 100)),
+    assert(user:cost(alpha, p1, 10)), assert(user:cost(beta, p1, 12)),
+    assert(user:cost(alpha, p2, 12)), assert(user:cost(beta, p2, 10)),
+    % each wins one part outright -> 50% each, comfortably under 80%
+    assert(user:max_global_share(alpha, 80)),
+    assert(user:max_global_share(beta, 80)),
+    parts_are_coupled,                       % the rule is present
+    solve(A, TCO), !,
+    solve_monolithic(_, MonoTCO), !,
+    TCO =:= MonoTCO,                         % shortcut gave the true optimum
+    supplier_total(alpha, A, AT),
+    AT =< 160.
+
+test(binding_global_share_cap_still_respected) :-
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 100)),
+    assert(user:cost(alpha, p1, 10)), assert(user:cost(beta, p1, 20)),
+    assert(user:cost(alpha, p2, 10)), assert(user:cost(beta, p2, 20)),
+    % alpha is cheapest everywhere and would take 100% -> the cap bites
+    assert(user:max_global_share(alpha, 40)),
+    solve(A, _), !,
+    supplier_total(alpha, A, AT),
+    AT =< 80.                                % 40% of 200
+
+test(slack_route_cap_matches_monolithic) :-
+    user:clear,
+    assert(user:demand(p1, 50)),
+    assert(user:demand(p2, 50)),
+    assert(user:cost(alpha, p1, 10)), assert(user:cost(beta, p1, 12)),
+    assert(user:cost(alpha, p2, 12)), assert(user:cost(beta, p2, 10)),
+    assert(user:supplier_route(alpha, north)),
+    assert(user:route_capacity(north, 5000)),   % far above any possible total
+    parts_are_coupled,
+    solve(_, TCO), !,
+    solve_monolithic(_, MonoTCO), !,
+    TCO =:= MonoTCO.
+
+test(rebates_never_take_the_shortcut) :-
+    % A rebate changes the objective, not just the feasible set, so a
+    % relaxed solve would compute the wrong cost entirely.
+    user:clear,
+    assert(user:demand(p1, 100)),
+    assert(user:demand(p2, 100)),
+    assert(user:cost(alpha, p1, 10)), assert(user:cost(beta, p1, 12)),
+    assert(user:cost(alpha, p2, 12)), assert(user:cost(beta, p2, 10)),
+    assert(user:rebate(alpha, 100, 50)),
+    solve(_, TCO), !,
+    \+ relaxation_happens_to_be_feasible(_, _),
+    TCO > 0.
+
+:- end_tests(slack_coupling).
+
+%% ------------------------------------------------------------------ %%
+
 :- begin_tests(routes).
 
 % Two cheap suppliers share one shipping corridor; a third is dearer but

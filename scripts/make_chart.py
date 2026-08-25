@@ -79,6 +79,27 @@ def _growth_exponent(points: list[tuple[float, float]]) -> float:
     return sum((lx[i] - mx) * (ly[i] - my) for i in range(n)) / denom
 
 
+def _crossover(points: list[tuple[float, float]], budget: float) -> int:
+    """
+    Size at which solve time first exceeds `budget`, by interpolating
+    between the two measurements that bracket it.
+
+    Averaging per-item cost across the whole run would overstate this —
+    cost per item drifts upward at the top end, so the average is
+    optimistic exactly where the answer matters.
+    """
+    ordered = sorted(p for p in points if p[1] is not None)
+    under = [p for p in ordered if p[1] <= budget]
+    over = [p for p in ordered if p[1] > budget]
+    if not under or not over:
+        return 0
+    x0, y0 = under[-1]
+    x1, y1 = over[0]
+    if y1 == y0:
+        return int(x0)
+    return int(x0 + (budget - y0) * (x1 - x0) / (y1 - y0))
+
+
 def build_plot(series: list[dict], x_label: str, y_label: str,
                series_var: str, plot_id: str) -> str:
     """
@@ -219,6 +240,8 @@ def main() -> int:
     demand = ok(results.get("demand", []))
     demand_grid = ok(results.get("demand_grid", []))
     coupled = ok(results.get("coupled", []))
+    capped = ok(results.get("capped", []))
+    capped_all = results.get("capped", [])
 
     item_pts = [(r["items"], r["seconds"]) for r in items]
     demand_pts = [(r["demand"], r["seconds"]) for r in demand]
@@ -285,6 +308,50 @@ def main() -> int:
         )
     else:
         grid_headline = ""
+
+    capped_section = ""
+    if capped:
+        cap_pts = [(r["items"], r["seconds"]) for r in capped]
+        big = [p for p in cap_pts if p[0] >= 8]      # past the small-N cliff
+        per_item = (big[-1][1] / big[-1][0] * 1000) if big else 0
+        # The business question is "how long will I wait", so measure against
+        # a fixed five minutes rather than whatever timeout a sweep happened
+        # to run with.
+        budget = 300.0
+        crossover = _crossover(cap_pts, budget)
+        slow = [r for r in capped_all if r.get("timed_out")]
+        cliff = ""
+        if slow:
+            worst = max(r["items"] for r in slow)
+            cliff = (
+                f" Below about eight items it is a different story: with only a "
+                f"handful of items one supplier wins most of them, the cap really "
+                f"does bite, and the solve stalls — "
+                f"{', '.join(str(r['items']) for r in sorted(slow, key=lambda r: r['items']))} "
+                f"item{'s' if worst != 1 else ''} exceeded the budget."
+            )
+        capped_section = f"""
+  <section class="card">
+    <h2>The realistic setup: a portfolio cap plus an award grid</h2>
+    <p class="lede">No supplier above {cfg.get('capped_share_cap', 30)}% of total
+    volume, awards on a {cfg.get('share_increment', 5)}% grid,
+    {cfg.get('capped_demand', 1000):,} units per item. A portfolio cap ties every
+    item together on paper — but once the catalogue is large enough the cheapest
+    supplier varies from item to item, the cap stops binding, and the solver can
+    prove each item optimal on its own again. That makes it linear at about
+    {per_item:.0f} ms per item, so roughly {crossover:,} items fits inside a
+    {budget / 60:.0f}-minute wait.{cliff}</p>
+    {build_plot([{"name": "portfolio cap + grid", "points": cap_pts, "slot": 2}],
+                "items sourced", "solve time (seconds)", "items", "capped")}
+    <details><summary>Table view</summary>
+      <div class="table-scroll">
+      {build_table([(f'{r["items"]:,}', f'{r["seconds"]:.1f}s',
+                     f'{r["seconds"] / r["items"] * 1000:.0f} ms/item')
+                    for r in capped],
+                   "Solve time with a portfolio cap and a 5% award grid")}
+      </div>
+    </details>
+  </section>"""
 
     timed_out = [r for r in results.get("items", []) if r.get("timed_out")]
     timeout_note = ""
@@ -534,6 +601,7 @@ def main() -> int:
   </section>
 {coupled_section}
 
+{capped_section}
   <section class="card">
     <h2>Method</h2>
     <p class="method">Each point is one <code>solve()</code> on generated data, timed

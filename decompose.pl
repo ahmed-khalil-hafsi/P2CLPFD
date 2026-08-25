@@ -193,6 +193,49 @@ force_rebates([S-State|Rest]) :-
     force_rebates(Rest).
 
 %% ------------------------------------------------------------------ %%
+%%  1c. THE RELAXATION THAT HAPPENS TO BE FEASIBLE                     %%
+%% ------------------------------------------------------------------ %%
+%
+%  A cross-part rule makes the parts inseparable ON PAPER, but very often
+%  it does not actually bite. A cap of "no supplier above 30% of total
+%  volume" constrains nothing if the cheapest-per-part award already
+%  spreads to 25% each.
+%
+%  Dropping a constraint can only lower the optimum. So solve WITHOUT the
+%  cross-part rules — fast, because the parts separate — and then check
+%  whether the answer happens to satisfy them. If it does, it is optimal
+%  for the constrained problem too: no cheaper award exists even without
+%  the rule, so certainly none exists with it.
+%
+%  This costs one decomposed solve to try, and turns the common case
+%  (a cap that is present but slack) from a monolithic search into a
+%  linear one. When the rule really does bite, the check fails and the
+%  caller falls back.
+
+%! relaxation_happens_to_be_feasible(-Allocation, -TCO) is semidet.
+relaxation_happens_to_be_feasible(Allocation, TCO) :-
+    %% Rebates change the objective, not just the feasible set, so a
+    %% relaxed solve would not even compute the right cost. Excluded.
+    \+ rebate(_, _, _),
+    solve_decomposed(Allocation, TCO),
+    coupling_satisfied(Allocation).
+
+%! coupling_satisfied(+Allocation) is semidet.
+%  Every cross-part rule holds for this allocation. Pure checking, so
+%  forall/2 is safe here — nothing is being posted.
+coupling_satisfied(Allocation) :-
+    total_demand_from_alloc(Allocation, TotalDemand),
+    forall(global_capacity(S, Cap),
+           ( supplier_total_q(S, Allocation, T), T =< Cap )),
+    forall(max_global_share(S, Pct),
+           ( supplier_total_q(S, Allocation, T), 100 * T =< Pct * TotalDemand )),
+    forall(route_capacity(R, RCap),
+           ( route_total_alloc(R, Allocation, RT), RT =< RCap )),
+    forall(max_route_share(R, RPct),
+           ( route_total_alloc(R, Allocation, RT),
+             100 * RT =< RPct * TotalDemand )).
+
+%% ------------------------------------------------------------------ %%
 %%  2. LOWER BOUND FOR COUPLED PROBLEMS                                %%
 %% ------------------------------------------------------------------ %%
 

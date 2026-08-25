@@ -85,12 +85,12 @@ decomposition with the coupling handled explicitly — the same problem as above
 
 ---
 
-### Compute the per-item optimum instead of searching for it
+### Compute the per-item optimum instead of searching for it — under a guard
 
-**Reinstated.** This was dropped when `share_increment` landed, on the grounds
-that the grid superseded it. Benchmarking says that was wrong: the grid removed
-*quantity* from the complexity, but did nothing about the per-item constant,
-which is where the time actually goes.
+**Reinstated, but narrower than first written.** Dropped when `share_increment`
+landed on the grounds that the grid superseded it; that was wrong, because the
+grid removed *quantity* from the complexity and left the per-item constant
+untouched. The first reinstatement then overstated the fix. Both corrected here.
 
 Measured on one item — 4 suppliers, quad sourcing, 5% floor, 5% grid:
 
@@ -100,20 +100,48 @@ Measured on one item — 4 suppliers, quad sourcing, 5% floor, 5% grid:
 | find a solution | 1.3 ms |
 | **prove it optimal** | **104 ms** |
 
-Proving optimality costs 80x finding the answer, and the answer itself is not
-hard: with linear costs and share floors the optimum is "give everyone their
-floor, give the rest to the cheapest supplier with capacity left". That is
-O(S log S). The solver instead explores ~969 branches to prove no better split
-exists, at roughly 100 microseconds a branch.
+**Where greedy is exact.** With linear costs, share floors and ceilings, and
+capacities, minimising a linear objective under one sum constraint and per-
+variable bounds is solved exactly by "give everyone their floor, then give the
+remainder to the cheapest supplier with room left". Property-tested against
+CLP(FD) on random instances: **58 of 58 exact**.
 
-**Approach:** detect the shape in `part_optimum/4` — linear costs, no MOQ, no
-price tiers, no fixed cost — and compute rather than label. Fall back to CLP(FD)
-the moment a MOQ, tier, or fixed cost appears, since those make the objective
-non-convex and are precisely what the solver is for.
+**Where it is not — and it fails unsafely.** Supplier-count rules
+(`min_suppliers`, `dual_source`, `max_suppliers`) are a subset-selection
+problem, not a sorting problem, and greedy has no notion of them. On random
+instances carrying `min_suppliers` it disagreed on **13 of 53**, and always in
+the dangerous direction: it reported a cost BELOW the true optimum, because the
+award it produced left too few suppliers active. That is a cheaper number for
+an award you cannot place — the same failure class as the silent-wrong-answer
+bugs fixed earlier.
 
-**Business value:** it is the difference between ~1,500 line items in five
-minutes and a catalogue of any realistic size. Everything else on this list is
-worth less.
+**The guard that makes it safe.** Use the fast path only when the count rules
+provably cannot bind:
+
+- no `max_suppliers` (choosing which suppliers to drop is genuinely
+  combinatorial), and
+- no `min_suppliers`/`dual_source`, **or** enough suppliers carry a positive
+  share floor that the count is already satisfied.
+
+Plus the existing exclusions: no MOQ, no price tiers, no fixed costs — those
+make the objective non-convex, which is precisely what CLP(FD) is for.
+
+Property-tested: **52 of 52 exact among admitted instances, 31 of 83 rejected**
+to the solver.
+
+**What that leaves.** The guard admits the benchmark configuration (quad
+sourcing where every supplier has a 5% floor, so the count is automatic) and
+plain cheapest-wins models. It rejects `dual_source` with no share floors,
+which is a common way to write a real model. So this is an optimisation for a
+large subset, not a general answer — worth building, but it will not make every
+model fast, and the guard must be checked before the fast path is entered,
+never after.
+
+**Open question worth testing before building:** greedy may be extendable to
+`min_suppliers` by activating the cheapest inactive suppliers at the minimum
+quantity and taking those units from the most expensive active one. That is an
+exchange argument and looks right, but it is untested — do not ship it on the
+strength of the argument alone.
 
 ---
 

@@ -168,6 +168,62 @@ exactly the constraint a buyer most wants priced.
 
 ---
 
+### The engine itself is the ceiling
+
+Benchmarked against HiGHS (a purpose-built mixed-integer solver) on the
+*identical* model, requiring the same proven optimum. Both engines returned
+the same answer every time:
+
+| model | items | CLP(FD) | HiGHS | gap |
+|---|---|---|---|---|
+| linear costs + share floors + grid | 100 | 13.4s | 0.004s | 3,384x |
+| linear costs + share floors + grid | 500 | 76.0s | 0.017s | **4,539x** |
+| + per-supplier fixed costs (binary activation) | 50 | 7.2s | 0.013s | 550x |
+| + per-supplier fixed costs (binary activation) | 200 | 32.4s | 0.052s | 627x |
+
+So the honest position: this is **not** a tool that is 90% optimised with a
+little tuning left. Remaining CLP(FD)-side tuning is worth maybe 2-5x in total,
+and the guarded greedy above ~100x on a subset. The engine gap is three orders
+of magnitude, and it widens with problem size.
+
+**Why.** A MIP solver evaluates an LP relaxation at every node, which yields a
+tight global lower bound. That is exactly the expensive half here: on one item,
+*finding* the answer takes 1.3ms and *proving* it optimal takes 104ms. LP
+relaxation makes the proof nearly free. CLP(FD)'s interval propagation cannot
+bound `sum(Q_i * c_i)` tightly, so branch-and-bound re-searches instead.
+
+**Every feature in this tool is a textbook MIP construct**: MOQ is a
+semi-continuous variable, price tiers are piecewise-linear (SOS2 or binaries),
+fixed costs and rebates are binary plus big-M, min/max suppliers is a
+cardinality constraint, route and global caps are plain linear rows, and
+multi-period with inventory is classic lot-sizing. Supplier allocation *is* a
+MIP problem; CLP(FD) is an unusual engine choice for it.
+
+**What CLP(FD) is genuinely buying**, and would have to be paid for elsewhere:
+no external solver dependency, the domain-narrowing tracer and its
+explainability story, arbitrary logical constraints with no reformulation, and
+a codebase that is already correct and covered by 79 + 61 tests.
+
+**Suggested shape, not a rewrite.** Add a MIP backend for the mainstream case
+and keep CLP(FD) as the reference implementation and cross-check — two
+independent engines agreeing is a stronger correctness story than either alone.
+Everything above the math layer (judgment, MCP, CLI, validation) is
+engine-agnostic and would not change.
+
+The second-order effect matters more than the raw speed: `sensitivity` re-solves
+once per binding constraint, so at these ratios the whole judgment layer moves
+from "expensive, run it deliberately" to "always on", and an agent can explore
+twenty scenarios in the time one costs today.
+
+**Caveats before committing to this.** The benchmark above covers two shapes,
+not the full feature set — tiers and rebates need careful formulation, and MOQ
+needs semi-continuous support. It adds a solver dependency (scipy/HiGHS is
+permissively licensed; `highspy` or OR-Tools are lighter options). And numeric
+tolerance replaces exact integer reasoning, which needs care where the current
+code relies on integer arithmetic.
+
+---
+
 ## Technical debt
 
 - `main.pl` is the single entry point (loads facts, solver, decompose,

@@ -64,6 +64,24 @@ def _money(n: float | int) -> str:
     return f"{round(n):,}"
 
 
+def _mid_sentence(text: str) -> str:
+    """
+    Lower-case a finding so it can be embedded after a colon.
+
+    Findings are written as standalone sentences, so they open with a
+    capital. Dropped into the middle of the verdict that reads wrong.
+    Only the leading word is touched, and only when it is plainly an
+    ordinary word — anything with an internal capital is left alone, so
+    a supplier or product name is never mangled.
+    """
+    if not text:
+        return text
+    first, _, rest = text.partition(" ")
+    if first[:1].isupper() and first[1:].islower():
+        return first.lower() + " " + rest if rest else first.lower()
+    return text
+
+
 def _pct(part: float, whole: float) -> float:
     return 0.0 if not whole else round(part * 100 / whole, 1)
 
@@ -478,7 +496,7 @@ def _verdict(solution: dict, findings: list[Finding]) -> str:
     if blocking:
         return (
             f"The cheapest legal award costs {_money(tco)}, but do not quote "
-            f"it yet — {blocking[0].say_to_user}"
+            f"it yet — {_mid_sentence(blocking[0].say_to_user)}"
         )
 
     risks = [f for f in findings if f.severity == "warning"]
@@ -488,7 +506,7 @@ def _verdict(solution: dict, findings: list[Finding]) -> str:
     if chances:
         verdict += f" {chances[0].say_to_user}"
     elif risks:
-        verdict += f" Before signing: {risks[0].say_to_user}"
+        verdict += f" Before signing: {_mid_sentence(risks[0].say_to_user)}"
     else:
         verdict += (
             " Nothing about it looks risky and no constraint is costing you "

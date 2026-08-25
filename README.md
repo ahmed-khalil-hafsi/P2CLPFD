@@ -56,6 +56,21 @@ what's left for the one with the lowest TCO.
 This is different from tools that guess and check. A heuristic might find a *good*
 solution. Constraint solving finds the *best* one — and proves it.
 
+**And you can watch it happen.** That is the part worth caring about:
+
+```bash
+p2clpfd trace quotes.csv
+```
+
+Each rule you added shows up as options being struck out — before capacity,
+supplier2 could take anything from 0 to 250 units; after the MOQ and the share
+floor, only 75 to 150 remain. When someone asks *"why couldn't supplier2 have
+more?"*, you can show them which rule closed the door, in order.
+
+Optimizers built for speed cannot do this — their internals are matrix
+algebra with no business meaning. The trade is real and it is documented:
+[benchmarks/](benchmarks/) measures how much speed that explainability costs.
+
 ## Use cases
 
 ### Automotive:
@@ -64,7 +79,10 @@ solution. Constraint solving finds the *best* one — and proves it.
 > parts, supplier2's volume discount kicks in at 10,000 units, no supplier
 > above 30% of total spend, and supplier7 needs $50k of tooling if you use them.
 
-P2CLPFD solves this in seconds. A spreadsheet can't.
+Every one of those is a rule you write down, not a formula you build. A
+spreadsheet cannot express "at least two suppliers" or "only if awarded" at
+all. At this scale expect minutes rather than seconds, and turn the award grid
+on — see [Performance](#performance) for the real numbers.
 
 ### Pharmaceuticals:
 
@@ -213,6 +231,8 @@ p2clpfd validate quotes.csv        # is this data fit to decide on?
 p2clpfd sensitivity quotes.csv     # where should I negotiate?
 p2clpfd multiperiod quotes.csv     # allocate across periods
 p2clpfd scenarios quotes.csv --scenario no_cap:'[{"remove":"dual_source(part1)"}]'
+p2clpfd trace quotes.csv           # show the reasoning, step by step
+p2clpfd mcp                        # serve to an AI agent over MCP
 ```
 
 Every command takes `--json` for scripting, and exit codes are meaningful
@@ -232,7 +252,7 @@ p2clpfd solve quotes.csv --json | jq .tco
 }
 ```
 
-Eight tools, no swipl or CLI knowledge needed:
+Nine tools, no swipl or CLI knowledge needed:
 
 | Tool | Answers |
 |---|---|
@@ -243,6 +263,7 @@ Eight tools, no swipl or CLI knowledge needed:
 | `compare_scenarios` | *What if?* |
 | `solve_multiperiod` | *How do I phase this across quarters?* |
 | `list_disqualified` | *Why isn't supplier X in the award?* |
+| `set_award_grid` | *Round the split to whole percentages* — and make it fast |
 | `solve_trace` | *How did the solver get there?* |
 
 ### Python
@@ -295,6 +316,10 @@ cells mean "no constraint" (unlimited / 0 / unrestricted).
 | `global_share_cap` | no | Supplier may not exceed % of total volume |
 
 Suppliers are auto-discovered from the data — no separate declaration needed.
+
+Three example files ship with the repo: `sample.csv` (the basics),
+`sample_advanced.csv` (qualification gates, landed cost, rebates), and
+`sample_multiperiod.csv` (demand across periods with carryover).
 
 ### Qualification gates
 
@@ -382,13 +407,30 @@ the quantity follows by arithmetic. Solve time goes flat:
 It costs about 0.36% when the true optimum falls off the grid, and MOQs and
 price breaks don't respect it — so it's a real trade, just usually a good one.
 
-A portfolio-wide rule (a global share cap, a rebate, a route ceiling) welds
-every item into one search, because minimizing a sum couples everything the
-sum touches. `decompose.pl` splits what it can — independent items, and each
-rebate's earned/not-earned branch — but a share cap or route ceiling still
-forces the monolithic path.
+**Portfolio-wide rules are cheap when they do not bite.** A cap like "no
+supplier above 30% of total volume" ties every item together on paper. But
+across a real catalogue the cheapest supplier varies item to item, the totals
+land near 25% by themselves, and the cap constrains nothing. P2CLPFD solves
+without the cross-part rules first and checks whether the answer already obeys
+them — dropping a rule can only make things cheaper, so an answer that obeys it
+anyway is the right one. It only falls back to the slow path when the rule
+genuinely binds.
 
-Measurements, method, and what was ruled out: [benchmarks/](benchmarks/).
+With that cap plus a 5% grid, at 1,000 units per item:
+
+| line items | solve time |
+|---|---|
+| 100 | 11s |
+| 500 | 54s |
+| 1,000 | 122s |
+| ~1,550 | **five minutes — the practical ceiling** |
+
+Small catalogues are the exception: with only a handful of items one supplier
+wins most of them, the cap really does bite, and the solve stalls. Rebates get
+the same treatment by trying both the earned and not-earned case.
+
+Measurements, method, what was ruled out, and how far this is from a
+purpose-built solver: [benchmarks/](benchmarks/).
 
 ## Documentation
 

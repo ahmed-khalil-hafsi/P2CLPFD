@@ -93,11 +93,20 @@ build_model_traced(Parts, Suppliers, RawAlloc, Vars, TCO, Stream) :-
     post_global_share(RawAlloc, Parts),
     emit_domains(Stream, RawAlloc, "global_share"),
 
-    (   build_rebates(Suppliers, RawAlloc, PartCosts, TCO)
-    ->  append(VarsParts, Vars),
+    post_route_constraints(RawAlloc, Parts),
+    emit_domains(Stream, RawAlloc, "routes"),
+
+    append(VarsParts, BaseVars),
+    %% Mirrors build_model/5 exactly, including testing rebate/3 BEFORE
+    %% calling build_rebates/4 — that predicate also fails when the rebate
+    %% model is infeasible, and treating that as "no rebates" would drop
+    %% the threshold constraint.
+    (   rebate(_, _, _)
+    ->  build_rebates(Suppliers, RawAlloc, TCO, RebateVars),
+        append(BaseVars, RebateVars, Vars),
         emit_domains(Stream, RawAlloc, "rebates")
     ;   sum(PartCosts, #=, TCO),
-        append(VarsParts, Vars),
+        Vars = BaseVars,
         emit_domains(Stream, RawAlloc, "tco")
     ).
 
@@ -188,7 +197,11 @@ merge_ord([A|As], [B|Bs], [B|Cs]) :-
 %% ------------------------------------------------------------------ %%
 
 emit(Stream, Dict) :-
-    json_write(Stream, Dict),
+    %% width(0) keeps each event on ONE line. json_write/2 pretty-prints
+    %% by default, which silently turned this stream into something no
+    %% line-oriented reader could parse — and NDJSON is exactly what the
+    %% format promises and what the live viewer consumes.
+    json_write(Stream, Dict, [width(0)]),
     nl(Stream),
     flush_output(Stream).
 

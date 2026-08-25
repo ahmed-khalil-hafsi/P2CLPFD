@@ -312,6 +312,38 @@ class TestMCP(unittest.TestCase):
         ])
         self.assertEqual(json.loads(_tool_text(responses[2]))["tco"], 367)
 
+    def test_trace_actually_runs(self):
+        # The tracer sat broken for two releases because nothing called it:
+        # build_rebates/4 changed signature and tracer.pl kept the old order.
+        responses = _mcp([_tool_call(1, "solve_trace", {"csv_path": TINY})])
+        self.assertFalse(responses[1]["result"].get("isError"),
+                         msg=_tool_text(responses[1])[:200])
+        lines = [l for l in _tool_text(responses[1]).splitlines() if l.strip()]
+        self.assertGreater(len(lines), 10)
+        events = [json.loads(l)["event"] for l in lines]
+        self.assertIn("optimal", events)
+
+    def test_trace_agrees_with_the_plain_solve(self):
+        responses = _mcp([
+            _tool_call(1, "solve_trace", {"csv_path": TINY}),
+            _tool_call(2, "solve_allocation", {"csv_path": TINY}),
+        ])
+        traced = [json.loads(l) for l in _tool_text(responses[1]).splitlines()
+                  if l.strip()]
+        optimal = next(e for e in traced if e["event"] == "optimal")
+        self.assertEqual(optimal["tco"],
+                         json.loads(_tool_text(responses[2]))["tco"])
+
+    def test_trace_narrows_domains_as_constraints_are_posted(self):
+        # The point of the tracer is showing options being eliminated.
+        responses = _mcp([_tool_call(1, "solve_trace", {"csv_path": TINY})])
+        snaps = [json.loads(l) for l in _tool_text(responses[1]).splitlines()
+                 if l.strip() and json.loads(l)["event"] == "domain_snapshot"]
+        self.assertGreater(len(snaps), 1)
+        first = sum(len(v["domain"]) for v in snaps[0]["vars"])
+        last = sum(len(v["domain"]) for v in snaps[-1]["vars"])
+        self.assertLess(last, first)
+
     def test_unknown_tool_is_an_error(self):
         responses = _mcp([_tool_call(1, "no_such_tool", {})])
         self.assertTrue(responses[1]["result"]["isError"])

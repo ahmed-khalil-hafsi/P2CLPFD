@@ -243,7 +243,8 @@ allocation_to_ws(Allocation, TCO, WebSocket) :-
 %! send_ws(+WebSocket, +Dict) is det.
 %
 send_ws(WebSocket, Dict) :-
-    with_output_to(string(Msg), json_write(current_output, Dict)),
+    with_output_to(string(Msg),
+                   json_write(current_output, Dict, [width(0)])),
     ws_send(WebSocket, text(Msg)).
 
 %! close_ws(+WebSocket) is det.

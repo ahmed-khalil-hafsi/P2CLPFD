@@ -85,6 +85,38 @@ decomposition with the coupling handled explicitly — the same problem as above
 
 ---
 
+### Compute the per-item optimum instead of searching for it
+
+**Reinstated.** This was dropped when `share_increment` landed, on the grounds
+that the grid superseded it. Benchmarking says that was wrong: the grid removed
+*quantity* from the complexity, but did nothing about the per-item constant,
+which is where the time actually goes.
+
+Measured on one item — 4 suppliers, quad sourcing, 5% floor, 5% grid:
+
+| | |
+|---|---|
+| candidate splits that exist | 969 |
+| find a solution | 1.3 ms |
+| **prove it optimal** | **104 ms** |
+
+Proving optimality costs 80x finding the answer, and the answer itself is not
+hard: with linear costs and share floors the optimum is "give everyone their
+floor, give the rest to the cheapest supplier with capacity left". That is
+O(S log S). The solver instead explores ~969 branches to prove no better split
+exists, at roughly 100 microseconds a branch.
+
+**Approach:** detect the shape in `part_optimum/4` — linear costs, no MOQ, no
+price tiers, no fixed cost — and compute rather than label. Fall back to CLP(FD)
+the moment a MOQ, tier, or fixed cost appears, since those make the objective
+non-convex and are precisely what the solver is for.
+
+**Business value:** it is the difference between ~1,500 line items in five
+minutes and a catalogue of any realistic size. Everything else on this list is
+worth less.
+
+---
+
 ### Make the share grid discoverable
 
 `share_increment` is the single biggest performance lever — it takes a solve

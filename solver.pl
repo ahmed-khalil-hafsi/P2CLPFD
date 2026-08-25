@@ -269,7 +269,7 @@ build_part_suppliers(Part, Suppliers, Qs, PartCost, Vars, Bs) :-
 
 build_part_suppliers_(_, [], _, [], [], [], []).
 build_part_suppliers_(Part, [Supplier|Rest], Demand,
-                     [q(Supplier,Q,CostC)|Qs], [CostC|Cs], [Q,B|Vs], [B|Bs]) :-
+                     [q(Supplier,Q,CostC)|Qs], [CostC|Cs], Vs, [B|Bs]) :-
     (   allocatable(Part, Supplier),
         qualified(Part, Supplier)
     ->  Q in 0..Demand,
@@ -281,7 +281,16 @@ build_part_suppliers_(Part, [Supplier|Rest], Demand,
             CostC #= C + FixedCostC
         ;   CostC = C
         ),
-        append(AuxVars, RestVs, Vs)
+        %% On an award grid the level decides the quantity outright
+        %% (100*Q #= Level*Pct*Demand), so labelling Q as well is not
+        %% just redundant — it drags a 0..Demand domain through every
+        %% propagation step, which is exactly the cost the grid exists
+        %% to remove. Label the level and let Q follow.
+        (   AuxVars = [_|_], share_increment_of(Part, _)
+        ->  Vs = [B|Vs1]
+        ;   Vs = [Q,B|Vs1]
+        ),
+        append(AuxVars, RestVs, Vs1)
     ;   Q = 0,
         B = 0,
         CostC = 0,

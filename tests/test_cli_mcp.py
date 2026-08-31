@@ -199,6 +199,36 @@ class TestCLI(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_decimal_cost_is_rejected_at_load_not_at_solve(self):
+        # The engine is integer-only; a decimal unit_cost used to load fine and
+        # then crash the solver with an opaque Prolog type error. It must now be
+        # a clean input error that names the cell and the workaround.
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
+            fh.write("part,supplier,demand,unit_cost,capacity\n"
+                     "widget,acme,100,4.2,100\n"
+                     "widget,globex,100,5,100\n")
+            path = fh.name
+        try:
+            code, _, err = _cli("solve", path)
+            self.assertEqual(code, EXIT_BAD_INPUT)
+            self.assertIn("4.2", err)
+            self.assertIn("integer", err.lower())
+            self.assertNotIn("Type error", err)   # no raw Prolog leak
+        finally:
+            os.unlink(path)
+
+    def test_scenario_name_with_spaces_and_symbols_round_trips(self):
+        # Free-text names ("C +10% on MCC") are quoted into a Prolog atom rather
+        # than interpolated raw, which used to be a "Operator expected" crash.
+        name = "C +10% on MCC"
+        _, out, _ = _cli(
+            "scenarios", TINY,
+            "--scenario", f'{name}:[{{"cost_delta": ["beta", "bolt", -20]}}]',
+            "--json", expect=EXIT_OK,
+        )
+        report = json.loads(out)
+        self.assertTrue(any(r["name"] == name for r in report["results"]))
+
 
 @unittest.skipUnless(AVAILABLE, "requires SWI-Prolog + janus-swi")
 class TestMCP(unittest.TestCase):
@@ -361,6 +391,47 @@ class TestMCP(unittest.TestCase):
         ])
         self.assertTrue(responses[1]["result"]["isError"])
         self.assertEqual(json.loads(_tool_text(responses[2]))["tco"], 367)
+
+
+class TestMCPResources(unittest.TestCase):
+    """The resource surface is pure-Python — it serves without the solver, so
+    these run even where SWI-Prolog is not installed."""
+
+    def test_initialize_advertises_resources(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        ])
+        self.assertIn("resources", responses[1]["result"]["capabilities"])
+
+    def test_resources_list_offers_the_csv_schema(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}},
+        ])
+        resources = responses[1]["result"]["resources"]
+        uris = {r["uri"] for r in resources}
+        self.assertIn("p2clpfd://csv-schema", uris)
+        for res in resources:
+            self.assertTrue(res["name"].strip())
+            self.assertTrue(res["description"].strip())
+
+    def test_resources_read_returns_the_column_reference(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+             "params": {"uri": "p2clpfd://csv-schema"}},
+        ])
+        contents = responses[1]["result"]["contents"]
+        self.assertEqual(contents[0]["uri"], "p2clpfd://csv-schema")
+        text = contents[0]["text"]
+        # The four required columns must be named so an agent can build a CSV.
+        for col in ("part", "supplier", "demand", "unit_cost"):
+            self.assertIn(col, text)
+
+    def test_reading_an_unknown_resource_is_an_error(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+             "params": {"uri": "p2clpfd://nope"}},
+        ])
+        self.assertIn("error", responses[1])
 
 
 if __name__ == "__main__":

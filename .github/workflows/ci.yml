@@ -34,6 +34,10 @@ jobs:
       - name: Install SWI-Prolog (Linux)
         if: runner.os == 'Linux'
         run: |
+          # Ubuntu's own swi-prolog package lags behind janus-swi's floor
+          # (>= 9.1.12), so the distro build fails the wheel. The upstream PPA
+          # ships a current release that satisfies it.
+          sudo add-apt-repository -y ppa:swi-prolog/stable
           sudo apt-get update
           sudo apt-get install -y swi-prolog pkg-config
 
@@ -78,9 +82,16 @@ jobs:
         shell: bash
         run: |
           # Strip swipl from PATH and confirm we raise SwiPrologNotFound with a
-          # helpful message rather than an opaque janus/linker traceback.
-          SWIPL_DIR="$(dirname "$(command -v swipl)")"
-          CLEAN_PATH="$(echo "$PATH" | tr ':' '\n' | grep -v -x "$SWIPL_DIR" | paste -sd: -)"
+          # helpful message rather than an opaque janus/linker traceback. Remove
+          # *every* directory that holds a swipl, not just the first one resolved
+          # — the Linux PPA leaves it reachable from more than one PATH entry, so
+          # dropping a single dir is not enough to hide it from shutil.which.
+          CLEAN_PATH="$PATH"
+          for d in $(echo "$PATH" | tr ':' '\n'); do
+            if [ -x "$d/swipl" ]; then
+              CLEAN_PATH="$(echo "$CLEAN_PATH" | tr ':' '\n' | grep -v -x "$d" | paste -sd: -)"
+            fi
+          done
           PATH="$CLEAN_PATH" python - <<'PY'
           from p2clpfd.solver import _ensure_loaded, SwiPrologNotFound
           try:

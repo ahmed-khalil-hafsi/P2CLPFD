@@ -6,6 +6,7 @@ Uses janus-swi to embed SWI-Prolog in-process for zero-overhead calls.
 
 from __future__ import annotations
 
+import csv as _csv
 import os.path
 import shutil
 from pathlib import Path
@@ -76,6 +77,73 @@ def _ensure_loaded() -> None:
     _LOADED = True
 
 
+#: Columns that carry names or truthy flags, not integer economics. Every
+#: other column in a P2CLPFD CSV feeds an integer CLP(FD) domain, so a decimal
+#: there does not fail at load — it crashes the engine at solve time with an
+#: opaque ``Type error: 'integer' expected``. See :func:`_check_integer_economics`.
+_NON_NUMERIC_COLUMNS = frozenset({
+    "part", "supplier", "region", "route",
+    "certifications", "required_certs", "dual_source",
+})
+
+
+def _check_integer_economics(path: str) -> None:
+    """Reject a CSV that carries decimal values in numeric columns.
+
+    The engine is integer-only (CLP(FD) domains and ``//`` division), so a
+    value like ``unit_cost=4.2`` slips through the loader and only surfaces as
+    a cryptic Prolog type error once :meth:`Solver.solve` runs. We catch it up
+    front and name the offending cell plus the cents workaround.
+
+    Raises:
+        ValueError: a numeric column holds a non-integer number.
+    """
+    try:
+        fh = open(path, newline="")
+    except OSError:
+        return  # let the Prolog loader raise the real parse error
+    with fh:
+        try:
+            reader = _csv.DictReader(fh)
+            rows = list(reader)
+        except _csv.Error:
+            return
+    for row in rows:
+        for col, val in row.items():
+            if col is None or col.strip().lower() in _NON_NUMERIC_COLUMNS:
+                continue
+            val = (val or "").strip()
+            if not val:
+                continue
+            try:
+                int(val)
+                continue
+            except ValueError:
+                pass
+            try:
+                float(val)
+            except ValueError:
+                continue  # free-text (e.g. a cert name in an odd column)
+            who = f"{row.get('supplier', '?')}/{row.get('part', '?')}"
+            raise ValueError(
+                f"{col.strip()} for {who} is {val} — P2CLPFD uses integer "
+                "economics; multiply by 100 if you need finer precision "
+                "(e.g. quote cents instead of dollars)."
+            )
+
+
+def _quote_atom(text: str) -> str:
+    """Render an arbitrary string as a quoted Prolog atom.
+
+    Scenario names are agent-supplied free text (``"C +10% on MCC"``);
+    interpolated raw into a ``Name-Overrides`` pair they break the Prolog
+    parser. Quoting lets any string through as a valid atom that round-trips
+    back out unchanged in the JSON results.
+    """
+    escaped = str(text).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 def _overrides_to_prolog(overrides: list[dict]) -> str:
     """Convert Python override dicts to a Prolog list of override terms."""
     parts = []
@@ -99,7 +167,7 @@ def _scenarios_to_prolog(scenarios: list[dict]) -> str:
     for sc in scenarios:
         name = sc["name"]
         overrides = _overrides_to_prolog(sc.get("overrides", []))
-        parts.append(f"{name}-{overrides}")
+        parts.append(f"{_quote_atom(name)}-{overrides}")
     return "[" + ",".join(parts) + "]"
 
 
@@ -173,7 +241,8 @@ class Solver:
 
         Raises:
             FileNotFoundError: the path does not exist.
-            ValueError: the file exists but could not be parsed.
+            ValueError: the file could not be parsed, or a numeric column
+                holds a non-integer value (the engine is integer-only).
 
         A failed load MUST raise rather than return. The Prolog side ships
         demo facts in facts.pl, so a silent failure would leave those
@@ -181,6 +250,10 @@ class Solver:
         """
         if not os.path.isfile(path):
             raise FileNotFoundError(f"no such CSV file: {path}")
+
+        # Fail on decimal economics before we touch Prolog — otherwise the file
+        # loads fine and the type error only surfaces at solve time.
+        _check_integer_economics(path)
 
         result = janus.query_once(
             'with_output_to(string(_), load_csv(Path))',

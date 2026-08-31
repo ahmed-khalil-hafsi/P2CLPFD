@@ -298,6 +298,11 @@ Nine tools, no swipl or CLI knowledge needed:
 | `set_award_grid` | *Round the split to whole percentages* — and make it fast |
 | `solve_trace` | *How did the solver get there?* |
 
+The server also exposes the CSV column reference as an MCP resource
+(`p2clpfd://csv-schema`), so an agent can learn what a valid input file looks
+like — required and optional columns, with an example — without leaving the
+protocol.
+
 ### Python
 
 ```python
@@ -325,15 +330,17 @@ curl -s -X POST localhost:8080/solve \
 
 ## CSV format
 
-One row per supplier-part pair. All quantities are absolute integers. Empty
-cells mean "no constraint" (unlimited / 0 / unrestricted).
+One row per supplier-part pair. Every numeric value — costs included — must be
+a whole integer; the engine is integer-only, so a decimal like `unit_cost=4.2`
+is rejected at load (quote cents, not dollars, if you need sub-unit precision).
+Empty cells mean "no constraint" (unlimited / 0 / unrestricted).
 
 | Column | Required | Description |
 |---|---|---|
 | `part` | yes | Part name |
 | `supplier` | yes | Supplier name |
 | `demand` | yes | Total demand for this part |
-| `unit_cost` | yes | Unit price |
+| `unit_cost` | yes | Unit price, as a whole integer (quote cents if you need sub-unit precision) |
 | `capacity` | no | Max this supplier can provide of this part |
 | `moq` | no | Minimum order quantity |
 | `share_min` | no | Min % of part demand this supplier must win |

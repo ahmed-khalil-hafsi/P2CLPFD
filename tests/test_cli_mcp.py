@@ -363,5 +363,46 @@ class TestMCP(unittest.TestCase):
         self.assertEqual(json.loads(_tool_text(responses[2]))["tco"], 367)
 
 
+class TestMCPResources(unittest.TestCase):
+    """The resource surface is pure-Python — it serves without the solver, so
+    these run even where SWI-Prolog is not installed."""
+
+    def test_initialize_advertises_resources(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        ])
+        self.assertIn("resources", responses[1]["result"]["capabilities"])
+
+    def test_resources_list_offers_the_csv_schema(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}},
+        ])
+        resources = responses[1]["result"]["resources"]
+        uris = {r["uri"] for r in resources}
+        self.assertIn("p2clpfd://csv-schema", uris)
+        for res in resources:
+            self.assertTrue(res["name"].strip())
+            self.assertTrue(res["description"].strip())
+
+    def test_resources_read_returns_the_column_reference(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+             "params": {"uri": "p2clpfd://csv-schema"}},
+        ])
+        contents = responses[1]["result"]["contents"]
+        self.assertEqual(contents[0]["uri"], "p2clpfd://csv-schema")
+        text = contents[0]["text"]
+        # The four required columns must be named so an agent can build a CSV.
+        for col in ("part", "supplier", "demand", "unit_cost"):
+            self.assertIn(col, text)
+
+    def test_reading_an_unknown_resource_is_an_error(self):
+        responses = _mcp([
+            {"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+             "params": {"uri": "p2clpfd://nope"}},
+        ])
+        self.assertIn("error", responses[1])
+
+
 if __name__ == "__main__":
     unittest.main()

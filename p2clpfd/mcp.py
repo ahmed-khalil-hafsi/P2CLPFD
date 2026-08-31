@@ -28,9 +28,21 @@ from .solver import Solver
 
 PROTOCOL_VERSION = "2024-11-05"
 
+# URI of the resource that documents the CSV columns. Kept as a constant
+# because both the resource listing and the csv_path description below refer
+# to it — they must never drift apart.
+CSV_SCHEMA_URI = "p2clpfd://csv-schema"
+
 _CSV_ARG = {
     "type": "string",
-    "description": "Absolute path to the CSV file with procurement data.",
+    "description": (
+        "Absolute path to the CSV file with procurement data — one row per "
+        "supplier-part pair. Required columns: part, supplier, demand, "
+        "unit_cost. Everything else (capacity, moq, share bounds, "
+        "qualification gates, landed cost, periods) is optional and means "
+        f"'no constraint' when blank. Read the resource {CSV_SCHEMA_URI} for "
+        "the full column reference before writing or editing a CSV."
+    ),
 }
 
 # ── tool schemas ──────────────────────────────────────────────────────────
@@ -268,6 +280,98 @@ TOOLS = [
     },
 ]
 
+# ── resources ─────────────────────────────────────────────────────────────
+
+# The CSV schema an agent must produce. Tool descriptions tell an agent WHICH
+# tool to call; this tells it what a valid input file looks like — the one
+# thing the tool schemas cannot carry, since every tool takes only a path.
+# Kept in sync with the CSV format section of README.md.
+CSV_SCHEMA = """\
+# P2CLPFD CSV schema
+
+One row per supplier-part pair. All quantities are absolute integers. Empty
+cells mean "no constraint" (unlimited / 0 / unrestricted). Suppliers and parts
+are auto-discovered from the rows — no separate declaration is needed.
+
+## Core columns
+
+| Column | Required | Description |
+|---|---|---|
+| part | yes | Part name. |
+| supplier | yes | Supplier name. |
+| demand | yes | Total demand for this part (repeat the same value on every row for the part). |
+| unit_cost | yes | Unit price. |
+| capacity | no | Max this supplier can provide of this part. |
+| moq | no | Minimum order quantity — this supplier takes 0 or at least this many. |
+| share_min | no | Min % of part demand this supplier must win if used. |
+| share_max | no | Max % of part demand this supplier may win. |
+| share_increment | no | Award granularity, % of demand (5 -> 60/30/10 splits). Must divide 100. |
+| noncost_adj | no | Per-unit TCO adjustment (+/-), e.g. a logistics or quality penalty. |
+| fixed_cost | no | One-time charge incurred only when this supplier is awarded the part. |
+| min_suppliers | no | Part must be split across at least N suppliers. |
+| max_suppliers | no | Part may use at most N suppliers. |
+| dual_source | no | Shorthand for min_suppliers = 2 (truthy value). |
+| global_capacity | no | This supplier's total output across all parts. |
+| global_share_cap | no | This supplier may not exceed this % of total awarded volume. |
+
+## Qualification gates (disqualify, they do not penalise)
+
+A supplier that fails a gate is removed before price is considered; no cost
+advantage buys them back in. Missing performance data also disqualifies — an
+unknown record is not a passing record.
+
+| Column | Description |
+|---|---|
+| otif | Supplier's on-time-in-full delivery %. |
+| min_otif | Global gate: below this OTIF, disqualified everywhere. |
+| lead_time | Quoted lead time for this part+supplier (days). |
+| max_lead_time | Per-part gate on lead time. |
+| certifications | Supplier's certs, semicolon-separated (iso9001;iatf16949). |
+| required_certs | Per-part required certs, semicolon-separated. |
+
+## Landed cost, rebates, routes, periods
+
+| Column | Description |
+|---|---|
+| region | Supplier's region (apac, eu, local, ...). |
+| fx_rate | FX multiplier as integer % for that region (105 = +5%). |
+| logistics_cost | Per-unit freight/customs for that region. |
+| rebate_threshold | Units across all parts needed to earn a rebate. |
+| rebate_pct | % off this supplier's entire spend once the threshold is met. |
+| route | Group name for a shared corridor (hormuz, atlantic, ...). |
+| route_capacity | Ceiling on that route's combined volume. |
+| route_share_cap | That route's combined volume as a max % of demand. |
+| period | Period number; demand/capacity then apply to that period. |
+| holding_cost | Per-unit-per-period cost of carrying inventory. |
+
+Landed unit cost is `invoice x fx / 100 + logistics`, so the solver optimizes
+cost to your dock, not invoice price. A route caps a set of suppliers at once —
+what a shipping chokepoint or a single border crossing actually is, which no
+per-supplier cap can express.
+
+## Minimal example
+
+```csv
+part,supplier,demand,unit_cost,capacity,dual_source
+part1,supplier2,250,13,150,1
+part1,supplier3,250,45,,1
+```
+"""
+
+RESOURCES = [
+    {
+        "uri": CSV_SCHEMA_URI,
+        "name": "CSV schema",
+        "description": (
+            "Full column reference for the procurement CSV every tool reads: "
+            "which columns are required, what the optional constraint columns "
+            "mean, and a minimal example. Read this before writing or editing "
+            "a CSV to hand to solve_allocation, get_advice, or any other tool."
+        ),
+        "mimeType": "text/markdown",
+    },
+]
+
 # ── tool dispatch ─────────────────────────────────────────────────────────
 
 _solver: Solver | None = None
@@ -430,13 +534,28 @@ _HANDLERS = {
 def _handle_initialize(_params: dict) -> dict:
     return {
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {"tools": {}},
+        "capabilities": {"tools": {}, "resources": {}},
         "serverInfo": {"name": "p2clpfd", "version": __version__},
     }
 
 
 def _handle_tools_list(_params: dict) -> dict:
     return {"tools": TOOLS}
+
+
+def _handle_resources_list(_params: dict) -> dict:
+    return {"resources": RESOURCES}
+
+
+def _handle_resources_read(params: dict) -> dict:
+    uri = params.get("uri", "")
+    if uri == CSV_SCHEMA_URI:
+        return {"contents": [{
+            "uri": uri,
+            "mimeType": "text/markdown",
+            "text": CSV_SCHEMA,
+        }]}
+    raise ValueError(f"Unknown resource: {uri}")
 
 
 def _handle_tools_call(params: dict) -> dict:
@@ -472,6 +591,10 @@ def _handle_request(msg: dict) -> dict | None:
             result = _handle_tools_list(msg.get("params", {}))
         elif method == "tools/call":
             result = _handle_tools_call(msg.get("params", {}))
+        elif method == "resources/list":
+            result = _handle_resources_list(msg.get("params", {}))
+        elif method == "resources/read":
+            result = _handle_resources_read(msg.get("params", {}))
         elif method.startswith("notifications/"):
             return None
         else:

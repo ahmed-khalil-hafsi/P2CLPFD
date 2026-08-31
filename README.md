@@ -298,6 +298,11 @@ Nine tools, no swipl or CLI knowledge needed:
 | `set_award_grid` | *Round the split to whole percentages* — and make it fast |
 | `solve_trace` | *How did the solver get there?* |
 
+The server also exposes the CSV column reference as an MCP resource
+(`p2clpfd://csv-schema`), so an agent can learn what a valid input file looks
+like — required and optional columns, with an example — without leaving the
+protocol.
+
 ### Python
 
 ```python

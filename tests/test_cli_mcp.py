@@ -199,6 +199,36 @@ class TestCLI(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_decimal_cost_is_rejected_at_load_not_at_solve(self):
+        # The engine is integer-only; a decimal unit_cost used to load fine and
+        # then crash the solver with an opaque Prolog type error. It must now be
+        # a clean input error that names the cell and the workaround.
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
+            fh.write("part,supplier,demand,unit_cost,capacity\n"
+                     "widget,acme,100,4.2,100\n"
+                     "widget,globex,100,5,100\n")
+            path = fh.name
+        try:
+            code, _, err = _cli("solve", path)
+            self.assertEqual(code, EXIT_BAD_INPUT)
+            self.assertIn("4.2", err)
+            self.assertIn("integer", err.lower())
+            self.assertNotIn("Type error", err)   # no raw Prolog leak
+        finally:
+            os.unlink(path)
+
+    def test_scenario_name_with_spaces_and_symbols_round_trips(self):
+        # Free-text names ("C +10% on MCC") are quoted into a Prolog atom rather
+        # than interpolated raw, which used to be a "Operator expected" crash.
+        name = "C +10% on MCC"
+        _, out, _ = _cli(
+            "scenarios", TINY,
+            "--scenario", f'{name}:[{{"cost_delta": ["beta", "bolt", -20]}}]',
+            "--json", expect=EXIT_OK,
+        )
+        report = json.loads(out)
+        self.assertTrue(any(r["name"] == name for r in report["results"]))
+
 
 @unittest.skipUnless(AVAILABLE, "requires SWI-Prolog + janus-swi")
 class TestMCP(unittest.TestCase):

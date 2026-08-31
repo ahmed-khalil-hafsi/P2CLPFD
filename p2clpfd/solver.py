@@ -7,14 +7,61 @@ Uses janus-swi to embed SWI-Prolog in-process for zero-overhead calls.
 from __future__ import annotations
 
 import os.path
+import shutil
 from pathlib import Path
 from typing import Any, Optional
-
-import janus_swi as janus
 
 _PL_DIR = Path(__file__).parent / "pl"
 
 _LOADED = False
+
+#: The janus-swi module, bound lazily by :func:`_import_janus` once we have
+#: confirmed SWI-Prolog is present. Stays ``None`` until the first Solver runs.
+janus = None
+
+
+class SwiPrologNotFound(RuntimeError):
+    """Raised when the SWI-Prolog runtime P2CLPFD depends on is missing.
+
+    P2CLPFD is a Python wrapper around a Prolog engine; ``pip install`` cannot
+    install the Prolog runtime itself, so we fail here with instructions rather
+    than let ``janus-swi`` raise a cryptic linker/consult error deep in a call.
+    """
+
+
+_INSTALL_HINT = """\
+P2CLPFD needs SWI-Prolog (>= 9.0) installed on this system, and it was not found.
+
+Install it, then reinstall p2clpfd if needed:
+
+  macOS         brew install swi-prolog
+  Ubuntu/Debian sudo apt install swi-prolog
+  conda         conda install -c conda-forge swi-prolog
+
+Verify with:  swipl --version
+
+See https://github.com/ahmed-khalil-hafsi/P2CLPFD/blob/main/INSTALL.md"""
+
+
+def _import_janus() -> None:
+    """Bind the module-level ``janus`` handle, or fail with a clear error.
+
+    ``janus_swi`` links against ``libswipl``; if the executable/runtime is not
+    resolvable the import (or first call) raises an opaque error. We front-run
+    that with a PATH check and wrap the import so the message is actionable.
+    """
+    global janus
+    if janus is not None:
+        return
+    if shutil.which("swipl") is None:
+        raise SwiPrologNotFound(_INSTALL_HINT)
+    try:
+        import janus_swi  # noqa: PLC0415 — deferred on purpose
+    except Exception as exc:  # linker/runtime resolution failure
+        raise SwiPrologNotFound(
+            _INSTALL_HINT + f"\n\n(underlying error: {exc})"
+        ) from exc
+    janus = janus_swi
 
 
 def _ensure_loaded() -> None:
@@ -22,6 +69,7 @@ def _ensure_loaded() -> None:
     global _LOADED
     if _LOADED:
         return
+    _import_janus()
     for name in ["facts", "solver", "csv_loader", "decompose", "scenarios",
                  "sensitivity", "multiperiod", "json_api", "tracer"]:
         janus.consult(str(_PL_DIR / f"{name}.pl"))

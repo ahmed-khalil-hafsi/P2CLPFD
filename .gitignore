@@ -7,3 +7,4 @@ build/
 dist/
 .DS_Store
 benchmarks/_preview.html
+sample-testing/

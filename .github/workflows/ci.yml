@@ -1,0 +1,93 @@
+name: CI
+
+# The thing most likely to break P2CLPFD for a stranger is not the solver logic
+# — it is the install. p2clpfd is a Python wrapper around SWI-Prolog, glued by
+# janus-swi, which compiles against the system libswipl at install time. This
+# workflow reproduces a cold install (fresh runner, no Prolog preinstalled) on
+# every OS/Python combination we claim to support, so a broken build surfaces
+# here instead of on PyPI where the version is immutable.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cold-install:
+    name: cold install (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install SWI-Prolog (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y swi-prolog pkg-config
+
+      - name: Install SWI-Prolog (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install swi-prolog pkg-config
+          # janus-swi's build needs to find libswipl; Homebrew does not put it
+          # where the linker looks by default, so publish the paths INSTALL.md
+          # documents into the environment for the pip step below.
+          PREFIX="$(brew --prefix swi-prolog)"
+          echo "SWI_HOME_DIR=${PREFIX}/lib/swipl" >> "$GITHUB_ENV"
+          echo "SWI_LIB_DIR=${PREFIX}/lib/swipl/lib/$(swipl --arch)" >> "$GITHUB_ENV"
+
+      - name: Show toolchain
+        run: |
+          swipl --version
+          python --version
+          pip --version
+
+      - name: Cold install from source
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Smoke test — import and solve
+        run: |
+          python - <<'PY'
+          from p2clpfd import Solver, __version__
+          print("p2clpfd", __version__)
+          s = Solver()
+          s.load_csv("sample.csv")
+          r = s.solve()
+          assert r is not None and r["tco"] == 19534, r
+          print("solve ok, TCO =", r["tco"])
+          PY
+
+      - name: Smoke test — CLI entry point
+        run: p2clpfd solve sample.csv
+
+      - name: Guard test — actionable error when SWI-Prolog is absent
+        shell: bash
+        run: |
+          # Strip swipl from PATH and confirm we raise SwiPrologNotFound with a
+          # helpful message rather than an opaque janus/linker traceback.
+          SWIPL_DIR="$(dirname "$(command -v swipl)")"
+          CLEAN_PATH="$(echo "$PATH" | tr ':' '\n' | grep -v -x "$SWIPL_DIR" | paste -sd: -)"
+          PATH="$CLEAN_PATH" python - <<'PY'
+          from p2clpfd.solver import _ensure_loaded, SwiPrologNotFound
+          try:
+              _ensure_loaded()
+          except SwiPrologNotFound as e:
+              assert "brew install swi-prolog" in str(e)
+              print("guard fired as expected")
+          else:
+              raise SystemExit("guard did NOT fire without swipl on PATH")
+          PY

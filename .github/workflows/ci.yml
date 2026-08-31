@@ -34,6 +34,10 @@ jobs:
       - name: Install SWI-Prolog (Linux)
         if: runner.os == 'Linux'
         run: |
+          # Ubuntu's own swi-prolog package lags behind janus-swi's floor
+          # (>= 9.1.12), so the distro build fails the wheel. The upstream PPA
+          # ships a current release that satisfies it.
+          sudo add-apt-repository -y ppa:swi-prolog/stable
           sudo apt-get update
           sudo apt-get install -y swi-prolog pkg-config
 

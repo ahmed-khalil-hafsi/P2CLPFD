@@ -23,6 +23,7 @@ import sys
 from traceback import format_exc
 from typing import Any
 
+from . import __version__
 from .solver import Solver
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -430,7 +431,7 @@ def _handle_initialize(_params: dict) -> dict:
     return {
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {"tools": {}},
-        "serverInfo": {"name": "p2clpfd", "version": "0.1.0"},
+        "serverInfo": {"name": "p2clpfd", "version": __version__},
     }
 
 

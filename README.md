@@ -476,6 +476,21 @@ purpose-built solver: [benchmarks/](benchmarks/).
 - [INSTALL.md](INSTALL.md) — installation (macOS, Linux, Conda, Docker)
 - [TECHNICAL.md](TECHNICAL.md) — architecture, constraint modeling deep dive, full API reference
 - [benchmarks/](benchmarks/) — scaling benchmark and where the time goes
+- [ahmedhafsi.com/p2clpfd](https://ahmedhafsi.com/p2clpfd/) — the short version, for a stakeholder who won't read a repo
+- [p2clpfd on PyPI](https://pypi.org/project/p2clpfd/) — releases
+
+## Related
+
+**[P2Predict](https://github.com/ahmed-khalil-hafsi/P2Predict)** — the step before this one.
+P2CLPFD decides who gets the volume once you know what the part should cost; P2Predict is
+what tells you that number, by turning your purchasing history into a price model your team
+can question in plain language.
+
+## Who built it
+
+P2CLPFD is built and maintained by **[Ahmed K. Hafsi](https://ahmedhafsi.com)**, who works
+on negotiation and applied game theory in industrial procurement. It comes out of that work:
+the award a category manager can defend, not just the cheapest number.
 
 ## License
 

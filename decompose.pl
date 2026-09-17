@@ -133,7 +133,7 @@ part_optimum_(Part, Suppliers, Qs, Cost) :-
     build_parts([Part], Suppliers, RawAlloc, [PartCost], VarsNested, AllBs),
     post_risk_constraints([Part], AllBs),
     append(VarsNested, Vars),
-    labeling([min(PartCost), ff], Vars),
+    minimize_cost(PartCost, Vars),
     Cost = PartCost,
     materialize(RawAlloc, [alloc(Part, Qs)]).
 

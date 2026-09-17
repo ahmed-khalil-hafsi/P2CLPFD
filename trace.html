@@ -224,11 +224,15 @@ function renderMeta(parts, suppliers) {
   `;
 }
 
-function domainSize(domain) {
-  return domain ? domain.length : 0;
+// Snapshots carry min/max/size; the full value list only when it is short.
+function domainSize(v) {
+  if (v && typeof v.size === 'number') return v.size;
+  return v && v.domain ? v.domain.length : 0;
 }
 
-function minMax(domain) {
+function minMax(v) {
+  if (v && typeof v.min === 'number') return { min: v.min, max: v.max };
+  const domain = v && v.domain;
   if (!domain || domain.length === 0) return { min: 0, max: 0 };
   return { min: domain[0], max: domain[domain.length - 1] };
 }
@@ -236,19 +240,19 @@ function minMax(domain) {
 function renderVars(vars, phase) {
   if (!vars || vars.length === 0) return;
   for (const v of vars) {
-    varDomains[v.name] = { domain: v.domain, phase: phase };
+    varDomains[v.name] = { v: v, phase: phase };
   }
   let html = '';
   // Global min/max for bar scaling
   let allMax = 0;
   for (const name in varDomains) {
-    const { min, max } = minMax(varDomains[name].domain);
+    const { min, max } = minMax(varDomains[name].v);
     if (max > allMax) allMax = max;
   }
   for (const name in varDomains) {
-    const { domain, phase: lastPhase } = varDomains[name];
-    const size = domainSize(domain);
-    const { min, max } = minMax(domain);
+    const { v, phase: lastPhase } = varDomains[name];
+    const size = domainSize(v);
+    const { min, max } = minMax(v);
     const pct = allMax > 0 ? (size / (allMax + 1)) * 100 : 100;
     const barClass = lastPhase === 'final' ? 'solved' : (size < 10 ? 'narrow' : '');
     html += `

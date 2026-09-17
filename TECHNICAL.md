@@ -130,7 +130,33 @@ results = s.compare_scenarios([
 # Validate facts
 s.validate()
 # {"status": "ok"}
+
+# What the solver understood, defaults filled in
+s.rules()
+# {"parts": [{"part": "part1", "demand": 250, "quotes": [...]}], ...}
+
+# Round awards to 5% steps for every part without its own step
+s.set_award_grid(5)
+# {"requested": 5, "per_part": {}}
+
+# Verdict + ranked findings in plain procurement language
+s.advise()
+# {"verdict": "...", "findings": [...], "tco": 19534}
+
+# The same pipeline, keeping every piece — one solve serves all of it
+s.assess()
+# {"validation": ..., "solution": ..., "sensitivity": ..., "advice": ...}
+
+# The whole decision as one self-contained document
+from p2clpfd import report
+
+payload = report.build(s, "quotes.csv")          # JSON-safe, what --json emits
+with open("award.html", "w") as fh:
+    fh.write(report.render_html(payload))        # takes no solver, reads no files
 ```
+
+`report.render_html` is a pure function of the payload, so the presentation
+layer can be exercised without SWI-Prolog installed.
 
 ### Override types
 
@@ -140,6 +166,13 @@ s.validate()
 | `remove` | `{"remove": "dual_source(part1)"}` | Remove all matching facts |
 | `cost_delta` | `{"cost_delta": ["supplier2", "part1", 10]}` | Adjust price by +10% |
 | `demand_delta` | `{"demand_delta": ["part1", 10]}` | Adjust demand by +10% |
+
+Names are written exactly as in the CSV, capitals included —
+`{"set": "share(ABC,TI,70,70)"}` refers to part `ABC` and supplier `TI`. The
+fact text is parsed with every named variable bound to the atom it spells, so
+only `_` and `_Name` act as wildcards, which is what `remove` templates use.
+Percentages are whole numbers. An unknown or malformed override raises
+`ValueError` instead of being skipped.
 
 ## HTTP API
 

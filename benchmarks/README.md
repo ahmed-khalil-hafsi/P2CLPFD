@@ -16,7 +16,27 @@ managers run:
 
 Everything else is held fixed while one variable moves.
 
-## The finding
+## Update, 17 September 2026 — the search changed
+
+Everything below this section was measured before two changes to the
+solver: a per-part cost floor with a greedy lower bound, and a search that
+halves the gap between that bound and the best award instead of improving
+the award a few units at a time. Re-measured with the same script
+(solve time only):
+
+| sweep | before | after |
+|---|---|---|
+| units per item, free quantities | 37.3 s at 400, 20,000 did not finish | **3 ms at 20,000** |
+| units per item, 5% grid | 0.32 s at 20,000 | 4 ms at 20,000 |
+| items, 20 units each | 105 ms/item at 3,000 | **1.07 ms/item at 3,000** |
+| capped + 5% grid, 1,000 units | 160.6 s at 1,000 items; 2, 3, 5, 6 items stalled | **1.6 s at 1,000**, 3.2 s at 2,000; 2, 3, 5 and 6 items in 0.7, 0.2, 1.1 and 21 s |
+| coupled (binding 40% cap, no grid) | 100 items exceeded 550 s | 2 items 1.2 s, 4 items 2.8 s, **8 items > 60 s** |
+
+The coupled case is still the ceiling: a portfolio rule that genuinely
+binds joins every item into one search. `scaling.json` and the chart still
+hold the earlier run.
+
+## The finding (before the change)
 
 **Catalogue size is not the problem. Order quantity is — and a share grid
 removes it entirely.**

@@ -219,6 +219,11 @@ This answers the questions your stakeholders actually ask: *"What if we drop
 the dual-source rule?"* → saves 5,792. *"What if supplier2 raises prices?"* →
 costs 75 more. The numbers are exact because the solver is exact.
 
+Write names exactly as they are in the CSV, capitals and all —
+`{"set": "share(STM32G071,TI,70,70)"}` means that part and that supplier. In a
+`remove` template, `_` means "any value". An override that is misspelt or
+malformed is rejected with a message, never silently skipped.
+
 ## The judgment layer
 
 The solver answers *"what is the cheapest legal award?"*. That is a mathematical
@@ -252,6 +257,43 @@ for a buyer rather than a solver. It will tell you when a constraint is *not*
 worth negotiating, and when a model is infeasible it names the rule to relax
 instead of just reporting failure.
 
+## The award, as a document
+
+A terminal is where you work; it is not where a decision goes to survive. The
+award gets contested months later — by the supplier who lost, by a stakeholder
+who wanted their incumbent, by an auditor who was not in the room — and what
+that person needs is a file, not your scrollback.
+
+```bash
+p2clpfd report quotes.csv -o award.html
+```
+
+One self-contained HTML file: the verdict, what to look at, the award itself,
+who ends up with what share of spend, the negotiation agenda, any scenarios you
+asked for, the suppliers your gates removed and why, and the solver's own
+reasoning — each rule striking out options in the order it happened.
+
+Every rule it names is written the way a buyer would say it — "minimum order",
+not `moq` — and explains itself when you point at it: what the rule does, plus
+a worked example. The same definitions are collected into a short glossary at
+the end, covering only the rules that actually shaped this award, so the
+printed copy loses nothing.
+
+It carries its own provenance. The footer names the input file, its SHA-256,
+the version that produced the document, and the exact command — so anyone who
+doubts it can re-run it and compare. If the checksum differs, the data changed
+and so may the award.
+
+Nothing is loaded from the network: no stylesheet, no font, no script. It opens
+from an email attachment on a locked-down laptop, and it prints to PDF.
+
+```bash
+p2clpfd report quotes.csv -o award.html \
+    --scenario drop_dual:'[{"remove":"dual_source(part1)"}]'
+p2clpfd report quotes.csv --no-trace        # skip the reasoning, and its second solve
+p2clpfd report quotes.csv --json            # the same data the document renders from
+```
+
 ## Getting started
 
 ### Command line
@@ -259,11 +301,13 @@ instead of just reporting failure.
 ```bash
 p2clpfd advise quotes.csv          # award + what to do about it
 p2clpfd solve quotes.csv           # just the cheapest legal award
+p2clpfd rules quotes.csv           # what it understood — read before you sign
 p2clpfd validate quotes.csv        # is this data fit to decide on?
 p2clpfd sensitivity quotes.csv     # where should I negotiate?
 p2clpfd multiperiod quotes.csv     # allocate across periods
-p2clpfd scenarios quotes.csv --scenario no_cap:'[{"remove":"dual_source(part1)"}]'
+p2clpfd scenarios quotes.csv --scenario single:'[{"remove":"dual_source(ABC)"}]'
 p2clpfd trace quotes.csv           # show the reasoning, step by step
+p2clpfd report quotes.csv -o award.html   # the whole decision, as one file
 p2clpfd mcp                        # serve to an AI agent over MCP
 ```
 
@@ -273,6 +317,10 @@ Every command takes `--json` for scripting, and exit codes are meaningful
 ```bash
 p2clpfd solve quotes.csv --json | jq .tco
 ```
+
+Awards are split in whole 5% steps by default, and every command that produces
+an award says so. `--increment 0` searches every quantity; see
+[Performance](#performance) for what the grid costs and when it is dropped.
 
 ### MCP server (Claude Desktop, Cursor, agents)
 
@@ -284,7 +332,7 @@ p2clpfd solve quotes.csv --json | jq .tco
 }
 ```
 
-Nine tools, no swipl or CLI knowledge needed:
+Ten tools, no swipl or CLI knowledge needed:
 
 | Tool | Answers |
 |---|---|
@@ -297,6 +345,7 @@ Nine tools, no swipl or CLI knowledge needed:
 | `list_disqualified` | *Why isn't supplier X in the award?* |
 | `set_award_grid` | *Round the split to whole percentages* — and make it fast |
 | `solve_trace` | *How did the solver get there?* |
+| `write_report` | *Give me something I can send* — writes the HTML document |
 
 The server also exposes the CSV column reference as an MCP resource
 (`p2clpfd://csv-schema`), so an agent can learn what a valid input file looks
@@ -333,7 +382,10 @@ curl -s -X POST localhost:8080/solve \
 One row per supplier-part pair. Every numeric value — costs included — must be
 a whole integer; the engine is integer-only, so a decimal like `unit_cost=4.2`
 is rejected at load (quote cents, not dollars, if you need sub-unit precision).
-Empty cells mean "no constraint" (unlimited / 0 / unrestricted).
+Write numbers plainly: `1000000`, not `1,000,000` or `$80`. Empty cells mean
+"no constraint" (unlimited / 0 / unrestricted), but every row still needs one
+cell per column. Headings are matched regardless of case and spacing, so a
+spreadsheet's `Unit Cost` reads as `unit_cost`.
 
 | Column | Required | Description |
 |---|---|---|
@@ -345,7 +397,7 @@ Empty cells mean "no constraint" (unlimited / 0 / unrestricted).
 | `moq` | no | Minimum order quantity |
 | `share_min` | no | Min % of part demand this supplier must win |
 | `share_max` | no | Max % of part demand this supplier may win |
-| `share_increment` | no | Award granularity, % of demand (5 = 60/30/10 splits) |
+| `share_increment` | no | Award step for this part, % of demand (5 = 60/30/10 splits), rounded to whole units; overrides the CLI's default |
 | `noncost_adj` | no | Per-unit TCO adjustment (±) |
 | `fixed_cost` | no | One-time charge when awarded |
 | `min_suppliers` | no | Part must have at least N suppliers |
@@ -402,7 +454,8 @@ P2CLPFD checks your data before solving, and says what it found in plain
 language rather than solver jargon:
 
 ```bash
-p2clpfd validate quotes.csv
+p2clpfd rules quotes.csv      # what was understood, defaults filled in
+p2clpfd validate quotes.csv   # what is wrong with it
 ```
 
 ```
@@ -413,6 +466,21 @@ Validation — Do not trust a result from this data until it is fixed.
           are needed.
 ```
 
+`rules` reads the model back the way the solver will enforce it — each quote's
+effective price after FX, freight and adjustments, its capacity, minimum order
+and share band, and why any supplier is excluded:
+
+```
+ABC — buy 1,000,000
+  at least 2 suppliers (dual sourcing)
+  awards in 5% steps, rounded to whole units
+  supplier  price  rules
+  --------  -----  -----------------------
+  CNS          80  at most 20% of the part
+  infineon    100  —
+  ti           89  —
+```
+
 Checks cover price-break gaps, MOQ above capacity, missing prices or demand,
 share bounds that cannot sum to demand, capacity below demand, and suppliers
 removed by qualification gates. Status is `error` (the answer would be wrong or
@@ -420,56 +488,65 @@ impossible), `warning` (looks unintended), or `ok`.
 
 ## Performance
 
-**Catalogue size is not the limit — order quantity is.**
+**Neither catalogue size nor order quantity is the limit for ordinary rules.**
+Measured on the benchmark's configuration (4 suppliers, quad sourcing, 5%
+minimum share), solve time only, 17 September 2026:
 
-Nothing in an ordinary constraint set (capacity, MOQ, shares, supplier
-counts) ties one item to another, so the solver proves each item optimal on
-its own and cost grows **linearly** with the number of items. Ten times the
-catalogue costs ten times the time.
+| what grows | measured |
+|---|---|
+| units per item, every quantity searched | 3 ms at 10 units, **3 ms at 20,000** |
+| line items, 20 units each | 1.07 ms per item, flat from 100 to 3,000 |
+| line items with a 30% portfolio cap and a 5% grid, 1,000 units each | 1.6 s for 1,000 items, 4.8 s for 3,000 |
 
-Quantity is the expensive axis. CLP(FD) searches over integer quantities, so
-the units per item set how big a space branch-and-bound must cover to *prove*
-optimality — growth is **near-quadratic**. Ten times the quantity costs far
-more than ten times the time.
+Two things make that possible. Each part carries a cost floor — every unit
+costs at least the cheapest supplier's effective price, plus whatever a dearer
+supplier adds — and a greedy lower bound that fills demand cheapest-first. And
+the search looks for the optimal *cost* by halving the gap between that bound
+and the best award found, rather than improving the award a few units at a
+time. Both are exact: the bounds hold for every legal award, so they only stop
+the search looking where the optimum cannot be.
 
-**`share_increment` removes that axis.** Restrict awards to whole multiples of
-5% of demand — the way awards are actually written — and there are only 21
-possible levels no matter how large the quantity. The level carries the search;
-the quantity follows by arithmetic. Solve time goes flat:
+Before that change, quantity was the expensive axis — 400 units took 37 s
+without a grid, and whether a three-supplier model finished at all depended on
+which supplier's name sorted first.
 
-| units per item | free quantities | 5% grid |
-|---|---|---|
-| 200 | 9.0s | **0.31s** |
-| 400 | 37.3s | **0.31s** |
-| 20,000 | did not finish | **0.32s** |
+**Awards are split in 5% steps by default.** Round-number splits are how
+awards are written, and the grid keeps a heavily constrained model (minimum
+orders, price breaks, one-off costs, many suppliers) to 21 choices per supplier
+whatever the quantity. Three things keep the default honest:
 
-It costs about 0.36% when the true optimum falls off the grid, and MOQs and
-price breaks don't respect it — so it's a real trade, just usually a good one.
+- **Any step works on any quantity.** Each award is the step rounded to a whole
+  unit, and the part still totals exactly: 5% of 333 is 16.65, so the award is
+  16 or 17.
+- **The grid is never the reason for "no award".** A 12–13% share band has no
+  5% level. The default grid is a speed setting, not your rule, so when it alone
+  rules out every award the search drops it, covers every quantity, and says so.
+  A `share_increment` you put in the file *is* your rule, and stays.
+- **It never claims more than it proved.** A gridded award is optimal *on the
+  grid*. Runs print a note, and the HTML report says so in its own subtitle.
+
+When the best split falls between steps the grid costs a little — 0.36% in the
+benchmark's forced case.
+
+```bash
+p2clpfd solve quotes.csv --increment 10   # coarser steps
+p2clpfd solve quotes.csv --increment 0    # search every quantity
+```
 
 **Portfolio-wide rules are cheap when they do not bite.** A cap like "no
-supplier above 30% of total volume" ties every item together on paper. But
-across a real catalogue the cheapest supplier varies item to item, the totals
-land near 25% by themselves, and the cap constrains nothing. P2CLPFD solves
-without the cross-part rules first and checks whether the answer already obeys
-them — dropping a rule can only make things cheaper, so an answer that obeys it
-anyway is the right one. It only falls back to the slow path when the rule
-genuinely binds.
+supplier above 30% of total volume" ties every item together on paper. Across a
+real catalogue the cheapest supplier varies item to item and the totals land
+under the cap by themselves, so P2CLPFD solves without the cross-part rules
+first and keeps that answer if it already obeys them.
 
-With that cap plus a 5% grid, at 1,000 units per item:
+**Where it is still slow: a portfolio rule that really binds.** When one
+supplier is cheapest on most items and a cap has to push volume away from it,
+every item joins one search. In the benchmark's worst case — the same supplier
+cheapest on every item, a 40% cap, 20 units each — 4 items take 2.8 s and 8 did
+not finish in a minute. With the 30% cap and 5% grid above, a 6-item catalogue
+takes 21 s. That case is the open item in [ROADMAP.md](ROADMAP.md).
 
-| line items | solve time |
-|---|---|
-| 100 | 11s |
-| 500 | 54s |
-| 1,000 | 122s |
-| ~1,550 | **five minutes — the practical ceiling** |
-
-Small catalogues are the exception: with only a handful of items one supplier
-wins most of them, the cap really does bite, and the solve stalls. Rebates get
-the same treatment by trying both the earned and not-earned case.
-
-Measurements, method, what was ruled out, and how far this is from a
-purpose-built solver: [benchmarks/](benchmarks/).
+Measurements, method, and the earlier numbers: [benchmarks/](benchmarks/).
 
 ## Documentation
 

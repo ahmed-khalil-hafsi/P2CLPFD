@@ -8,7 +8,9 @@
 %%%   {"event":"model_built","parts":[...],"suppliers":[...],
 %%%    "vars":[{"name":"q.s1.p1","role":"qty"},...]}
 %%%   {"event":"domain_snapshot","phase":"parts",
-%%%    "vars":[{"name":"q.s1.p1","domain":[0,1,...]},...]}
+%%%    "vars":[{"name":"q.s1.p1","min":0,"max":250,"size":251,
+%%%             "domain":[0,1,...]},...]}
+%%%   ("domain" lists every value only while there are at most 1,000.)
 %%%   {"event":"domain_snapshot","phase":"capacity","vars":[...]}
 %%%   {"event":"domain_snapshot","phase":"risk","vars":[...]}
 %%%   {"event":"domain_snapshot","phase":"global_share","vars":[...]}
@@ -41,7 +43,7 @@ solve_with_trace(Allocation, TCO, Stream) :-
 
     emit(Stream, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO), ff], Vars)
+    (   minimize_cost(TCO, Vars)
     ->  materialize(RawAlloc, Allocation),
         emit_domains_ground(Stream, Allocation, TCO, "final"),
         emit(Stream, _{event:"phase", phase:"optimal"}),
@@ -64,7 +66,7 @@ solve_with_trace(Allocation, TCO, Stream, MaxCost) :-
     TCO #=< MaxCost,
     emit(Stream, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO), ff], Vars)
+    (   minimize_cost(TCO, Vars)
     ->  materialize(RawAlloc, Allocation),
         emit_domains_ground(Stream, Allocation, TCO, "final"),
         emit(Stream, _{event:"phase", phase:"optimal"}),
@@ -141,9 +143,7 @@ emit_domains(Stream, RawAlloc, Phase) :-
               string_concat("q.", SStr, T1),
               string_concat(T1, ".", T2),
               string_concat(T2, PStr, QName),
-              fd_dom(Q, Dom),
-              dom_to_list(Dom, List),
-              D = _{name:QName, domain:List}
+              domain_json(QName, Q, D)
             ),
             Vars),
     emit(Stream, _{event:"domain_snapshot", phase:Phase, vars:Vars}).
@@ -162,7 +162,7 @@ emit_domains_ground(Stream, Allocation, TCO, Phase) :-
               string_concat("q.", SStr, T1),
               string_concat(T1, ".", T2),
               string_concat(T2, PStr, QName),
-              D = _{name:QName, domain:[Q]}
+              domain_json(QName, Q, D)
             ),
             QVars),
     emit(Stream, _{event:"domain_snapshot", phase:Phase,

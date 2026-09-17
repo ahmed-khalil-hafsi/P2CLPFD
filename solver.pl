@@ -56,8 +56,85 @@ solve_monolithic(Allocation, TCO) :-
     suppliers(Suppliers),
     build_model(Parts, Suppliers, RawAlloc, Vars, TCO),
     post_tco_lower_bound(TCO),
-    labeling([min(TCO), ff], Vars),
+    minimize_cost(TCO, Vars),
     materialize(RawAlloc, Allocation).
+
+%! domain_json(+Name, +Q, -Dict) is det.
+%
+%  One variable's remaining options, for the trace. min, max and size are
+%  always there; the full list of values only while it is short. Listing
+%  every value of a million-unit part wrote 100 MB and took 16 seconds,
+%  and no reader wants more than the range and how many are left.
+domain_json(Name, Q, Dict) :-
+    (   integer(Q)
+    ->  Dict = _{name:Name, min:Q, max:Q, size:1, domain:[Q]}
+    ;   fd_inf(Q, Min),
+        fd_sup(Q, Max),
+        fd_size(Q, Size),
+        (   integer(Size), Size =< 1000
+        ->  fd_dom(Q, Dom),
+            dom_to_list(Dom, List),
+            Dict = _{name:Name, min:Min, max:Max, size:Size, domain:List}
+        ;   Dict = _{name:Name, min:Min, max:Max, size:Size}
+        )
+    ).
+
+%! minimize_cost(?Cost, +Vars) is semidet.
+%
+%  Bind Vars to an award of least Cost; fail when there is none.
+%
+%  clpfd's own labeling([min(Cost)]) improves the incumbent one solution
+%  at a time. When each step saves only a few units of cost — moving one
+%  part from a supplier at 89 to one at 80 — that walk is hundreds of
+%  thousands of steps long, and whether it finished depended on nothing
+%  more principled than which supplier's name sorted first.
+%
+%  So search the cost instead: find any award, then halve the gap between
+%  the cheapest cost still possible (Cost's lower bound, which the part
+%  floors keep tight) and the best award found, asking only "is there an
+%  award at or below this?". That is ~log2(gap) questions, and the floor
+%  is asked first because when no rule binds it is already the answer.
+%
+minimize_cost(Cost, Vars) :-
+    cost_at_most(Cost, Vars, sup, Upper),
+    fd_inf(Cost, Lower),
+    (   integer(Lower)
+    ->  (   cost_at_most(Cost, Vars, Lower, AtFloor)
+        ->  Best = AtFloor
+        ;   Lower1 is Lower + 1,
+            halve_cost_gap(Cost, Vars, Lower1, Upper, Best)
+        ),
+        Cost #= Best,
+        once(labeling([ff], Vars))
+    ;   % no finite floor to halve towards; fall back to stepping
+        once(labeling([min(Cost), ff], Vars))
+    ).
+
+%  Invariant: an award costing High exists; none costs less than Low.
+halve_cost_gap(_, _, Low, High, High) :-
+    Low >= High, !.
+halve_cost_gap(Cost, Vars, Low, High, Best) :-
+    Mid is Low + (High - Low) // 2,
+    (   cost_at_most(Cost, Vars, Mid, Found)
+    ->  halve_cost_gap(Cost, Vars, Low, Found, Best)
+    ;   Low1 is Mid + 1,
+        halve_cost_gap(Cost, Vars, Low1, High, Best)
+    ).
+
+%! cost_at_most(+Cost, +Vars, +Max, -Found) is semidet.
+%  Cost of some award costing at most Max (sup: any award). Runs under
+%  double negation so nothing it binds survives; the cost is carried out
+%  in a global variable instead.
+cost_at_most(Cost, Vars, Max, Found) :-
+    \+ \+ ( (   Max == sup
+            ->  true
+            ;   Cost #=< Max
+            ),
+            once(labeling([ff], Vars)),
+            once(indomain(Cost)),
+            nb_setval(p2clpfd_cost_found, Cost)
+          ),
+    nb_getval(p2clpfd_cost_found, Found).
 
 %! solve(-Allocation, -TCO, +MaxCost) is nondet.
 %
@@ -265,7 +342,105 @@ build_part_suppliers(Part, Suppliers, Qs, PartCost, Vars, Bs) :-
     build_part_suppliers_(Part, Suppliers, Demand, Qs, Costs, Vars, Bs),
     qs_of(Qs, QOnly),
     sum(QOnly, #=, Demand),
-    sum(Costs, #=, PartCost).
+    sum(Costs, #=, PartCost),
+    post_part_cost_floor(Part, Demand, Qs, Bs, PartCost).
+
+%! post_part_cost_floor(+Part, +Demand, +Qs, +Bs, +PartCost) is det.
+%
+%  A redundant bound that makes branch-and-bound prove optimality fast.
+%
+%  `PartCost #= sum(Qi*Ci)` is correct but propagates almost nothing: an
+%  upper bound on the cost only says each Qi <= Best/Ci, which is close to
+%  the whole demand. So proving an award optimal meant enumerating the
+%  levels of every supplier — six suppliers took ten seconds, eight never
+%  finished, whatever the volume.
+%
+%  Every unit costs at least the cheapest floor Fmin, so
+%
+%      PartCost >= Fmin*Demand + sum((Fi - Fmin)*Qi + Fixed_i*Bi)
+%
+%  where Fi is supplier i's lowest possible effective unit cost (its
+%  cheapest tier, landed and adjusted). Once a good award is known, the
+%  slack Best - Fmin*Demand is small, and this caps each expensive
+%  supplier at slack/(Fi - Fmin) units — pruning most of the tree before
+%  it is searched. It holds for every award, so it never changes the
+%  optimum; it only stops the search looking where the optimum cannot be.
+%
+post_part_cost_floor(Part, Demand, Qs, Bs, PartCost) :-
+    part_cost_terms(Qs, Bs, Part, Terms),
+    (   Terms == []
+    ->  true
+    ;   findall(F, member(term(F, _, _, _), Terms), Floors),
+        min_list(Floors, FMin),
+        floor_expression(Terms, FMin, 0, Expr),
+        PartCost #>= FMin * Demand + Expr,
+        post_greedy_bound(Terms, Demand, PartCost)
+    ).
+
+%! post_greedy_bound(+Terms, +Demand, +PartCost) is det.
+%
+%  The cheapest this part could possibly cost: fill demand from the
+%  cheapest floor upward, each supplier up to the most it can currently
+%  take. Share minimums, MOQs and supplier counts are ignored, so this is
+%  a relaxation — never above the true optimum — and when those rules do
+%  not bind it IS the optimum, which lets the search stop on its first
+%  probe. Skipped when the suppliers cannot cover demand at all; the
+%  search reports that infeasibility itself.
+post_greedy_bound(Terms, Demand, PartCost) :-
+    findall(F-Up,
+            ( member(term(F, Q, _, _), Terms), fd_sup(Q, Up) ),
+            Pairs0),
+    msort(Pairs0, Pairs),
+    findall(Fx, ( member(term(_, _, Fx, _), Terms), Fx < 0 ), Negs),
+    sum_list(Negs, NegFixed),
+    (   greedy_fill(Pairs, Demand, 0, Cost)
+    ->  Bound is Cost + NegFixed,
+        PartCost #>= Bound
+    ;   true
+    ).
+
+greedy_fill(_, 0, Acc, Acc) :- !.
+greedy_fill([F-Up|Rest], Left, Acc0, Cost) :-
+    Take is min(Up, Left),
+    Acc1 is Acc0 + F * Take,
+    Left1 is Left - Take,
+    greedy_fill(Rest, Left1, Acc1, Cost).
+
+%  One term per supplier that can actually be awarded; the rest were
+%  bound to zero when the model was built and contribute nothing.
+part_cost_terms([], [], _, []).
+part_cost_terms([q(S, Q, _)|Qs], [B|Bs], Part, Terms) :-
+    (   Q == 0
+    ->  Terms = Rest
+    ;   unit_cost_floor(S, Part, F),
+        (   fixed_cost(S, Part, Fixed) -> true ; Fixed = 0 ),
+        Terms = [term(F, Q, Fixed, B)|Rest]
+    ),
+    part_cost_terms(Qs, Bs, Part, Rest).
+
+floor_expression([], _, Acc, Acc).
+floor_expression([term(F, Q, Fixed, B)|Rest], FMin, Acc0, Expr) :-
+    Coeff is F - FMin,
+    Acc1 = Acc0 + Coeff * Q + Fixed * B,
+    floor_expression(Rest, FMin, Acc1, Expr).
+
+%! unit_cost_floor(+Supplier, +Part, -Floor) is det.
+%  The lowest effective unit cost this supplier could charge on this part.
+%  Computed over every tier rather than from the cheapest raw price, so it
+%  stays a true floor whatever the FX and adjustment terms do.
+unit_cost_floor(Supplier, Part, Floor) :-
+    (   has_tiers(Supplier, Part)
+    ->  findall(Raw, price_tier(Supplier, Part, _, _, Raw), Raws)
+    ;   cost(Supplier, Part, Raw0),
+        Raws = [Raw0]
+    ),
+    (   noncost_adjustment(Supplier, Adj) -> true ; Adj = 0 ),
+    findall(E,
+            ( member(R, Raws),
+              landed_unit_cost(Supplier, R, L),
+              E is L + Adj ),
+            Effs),
+    min_list(Effs, Floor).
 
 build_part_suppliers_(_, [], _, [], [], [], []).
 build_part_suppliers_(Part, [Supplier|Rest], Demand,
@@ -281,16 +456,18 @@ build_part_suppliers_(Part, [Supplier|Rest], Demand,
             CostC #= C + FixedCostC
         ;   CostC = C
         ),
-        %% On an award grid the level decides the quantity outright
-        %% (100*Q #= Level*Pct*Demand), so labelling Q as well is not
-        %% just redundant — it drags a 0..Demand domain through every
-        %% propagation step, which is exactly the cost the grid exists
-        %% to remove. Label the level and let Q follow.
+        %% On an award grid the level carries the search: once it is
+        %% fixed, Q has at most two values left (the step rounded down or
+        %% up to a whole unit — see share_grid/4). So Q is labelled AFTER
+        %% the level, where it costs one binary choice, never before it,
+        %% where it would drag a 0..Demand domain through the search —
+        %% exactly the cost the grid exists to remove.
         (   AuxVars = [_|_], share_increment_of(Part, _)
-        ->  Vs = [B|Vs1]
-        ;   Vs = [Q,B|Vs1]
-        ),
-        append(AuxVars, RestVs, Vs1)
+        ->  Vs = [B|Vs1],
+            append(AuxVars, [Q|RestVs], Vs1)
+        ;   Vs = [Q,B|Vs1],
+            append(AuxVars, RestVs, Vs1)
+        )
     ;   Q = 0,
         B = 0,
         CostC = 0,
@@ -359,10 +536,20 @@ supplier_part_constraints(Part, Supplier, Demand, Q, CostC, AuxVars) :-
 %  the LEVEL that carries the search: Q is then fixed by arithmetic.
 %  Solve time stops depending on quantity altogether.
 %
-%  Levels whose quantity is not a whole number are simply absent from
-%  Level's domain, which the linear relation below enforces on its own —
-%  100 * Q #= Level * Pct * Demand has no solution for a Level that would
-%  need a fractional Q. So the model never invents an unachievable split.
+%  A step rarely lands on a whole unit — 5% of 333 is 16.65 — so Q is the
+%  step ROUNDED to a whole unit, either way: within one unit of
+%  Level*Pct% of demand. Demand is still met exactly, because the part's
+%  quantities must sum to it and the rounding directions absorb the
+%  remainder. That is how a buyer reads "60/40" on 333 units: 200/133,
+%  not "impossible".
+%
+%  It used to be an exact equality, 100*Q #= Level*Pct*Demand, which
+%  silently struck every level needing a fractional Q. On a demand the
+%  step does not divide that left few or no levels, so a feasible model
+%  reported no award — or, with every level gone, the grid had to be
+%  dropped and the search ran unbounded. Rounding keeps all levels on
+%  every demand, and where the step does divide evenly it is the same
+%  equality as before (the one-unit slack admits only the exact value).
 %
 share_grid(Part, Demand, Q, GridVars) :-
     (   share_increment_of(Part, Pct),
@@ -370,7 +557,8 @@ share_grid(Part, Demand, Q, GridVars) :-
         Demand > 0
     ->  Levels is 100 // Pct,
         Level in 0..Levels,
-        100 * Q #= Level * Pct * Demand,
+        100 * Q #>= Level * Pct * Demand - 99,
+        100 * Q #=< Level * Pct * Demand + 99,
         GridVars = [Level]
     ;   GridVars = []
     ).

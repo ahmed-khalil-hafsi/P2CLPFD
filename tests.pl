@@ -344,6 +344,40 @@ test(slack_global_capacity_stays_separable) :-
 
 %% ------------------------------------------------------------------ %%
 
+:- begin_tests(search).
+
+% Branch-and-bound used to improve the award one small step at a time, so
+% how long a solve took depended on which supplier's name sorted first.
+% This model — capitalised names, a million units, no capacities, a capped
+% low-cost supplier — ran for minutes; a renamed copy finished instantly.
+
+setup_mcu :-
+    user:clear,
+    assert(user:demand('ABC', 1000000)),
+    assert(user:cost(infineon, 'ABC', 100)),
+    assert(user:cost(ti, 'ABC', 89)),
+    assert(user:cost('CNS', 'ABC', 80)),
+    assert(user:share('ABC', 'CNS', 0, 20)),
+    assert(user:dual_source('ABC')).
+
+test(exact_search_does_not_walk_the_cost_down) :-
+    setup_mcu,
+    call_with_time_limit(20, solve(A, TCO)), !,
+    TCO =:= 200000 * 80 + 800000 * 89,
+    member(alloc('ABC', Qs), A),
+    member(q('CNS', 200000), Qs),
+    member(q(ti, 800000), Qs).
+
+test(search_still_proves_a_binding_rule_costs_money) :-
+    % A 30% floor on the dearest supplier: the greedy bound is not
+    % reachable, so the answer comes from the halving search.
+    setup_mcu,
+    assert(user:share('ABC', infineon, 30, 100)),
+    call_with_time_limit(20, solve(_, TCO)), !,
+    TCO =:= 300000 * 100 + 200000 * 80 + 500000 * 89.
+
+:- end_tests(search).
+
 :- begin_tests(share_increment).
 
 % A 5% grid means every award is a whole multiple of 5% of demand. It is
@@ -394,9 +428,9 @@ test(per_part_increment_beats_global) :-
     member(q(alpha, QA), Qs),
     QA =:= 35.                                 % 5% grid, not the 50% one
 
-test(unreachable_levels_are_excluded_not_rounded) :-
-    % 5% of 30 is 1.5 units, so only even levels are achievable. The
-    % solver must pick a reachable split, never invent a fractional one.
+test(fractional_steps_round_to_whole_units) :-
+    % 5% of 30 is 1.5 units. The award rounds to whole units and still
+    % meets demand exactly — it never invents a fractional quantity.
     user:clear,
     assert(user:demand(p1, 30)),
     assert(user:cost(alpha, p1, 10)),
@@ -424,6 +458,38 @@ test(grid_respects_share_floors) :-
     member(q(beta, QB), Qs),
     QB >= 5,
     0 =:= QB mod 5.
+
+test(a_step_that_does_not_divide_demand_still_finds_the_award) :-
+    % 5% of 333 is 16.65 units, so an exact equality admits almost no
+    % levels and this feasible model used to report no award. The cap
+    % puts the free optimum (alpha 200) off the grid's exact multiples.
+    user:clear,
+    assert(user:demand(p1, 333)),
+    assert(user:cost(alpha, p1, 10)),
+    assert(user:cost(beta, p1, 12)),
+    assert(user:share(p1, alpha, 0, 60)),      % 60% of 333 = 199.8
+    assert(user:share_increment(5)),
+    solve(A, TCO), !,
+    member(alloc(p1, Qs), A),
+    sum_qs(Qs, 333),
+    member(q(alpha, QA), Qs),
+    QA =:= 199,                                % 12th level, rounded down
+    TCO =:= 199*10 + 134*12.
+
+test(rounding_is_within_one_unit_of_the_step) :-
+    user:clear,
+    assert(user:demand(p1, 1001)),
+    assert(user:cost(alpha, p1, 10)),
+    assert(user:cost(beta, p1, 12)),
+    assert(user:cost(gamma, p1, 15)),
+    assert(user:dual_source(p1)),
+    assert(user:share_increment(10)),
+    solve(A, _), !,
+    member(alloc(p1, Qs), A),
+    sum_qs(Qs, 1001),
+    forall(member(q(_, Q), Qs),
+           ( Level is round(Q * 10 / 1001),
+             abs(Q * 100 - Level * 10 * 1001) < 100 )).
 
 :- end_tests(share_increment).
 

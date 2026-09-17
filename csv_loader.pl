@@ -108,7 +108,8 @@ load_csv(Path) :-
     ),
     csv_read_file(Path, Rows, [strip(true)]),
     Rows = [HeaderRow | DataRows],
-    HeaderRow =.. [_ | Header],
+    HeaderRow =.. [_ | Header0],
+    maplist(column_key, Header0, Header),
     check_required_columns(Header, Path),
     retract_all_facts,
     assert_rows(Header, DataRows),
@@ -123,7 +124,8 @@ load_csv(Path) :-
 load_csv(Path, Options) :-
     csv_read_file(Path, Rows, [strip(true)]),
     Rows = [HeaderRow | DataRows],
-    HeaderRow =.. [_ | Header],
+    HeaderRow =.. [_ | Header0],
+    maplist(column_key, Header0, Header),
     check_required_columns(Header, Path),
     (   memberchk(keep_existing(true), Options)
     ->  true
@@ -132,6 +134,20 @@ load_csv(Path, Options) :-
     assert_rows(Header, DataRows),
     length(DataRows, N),
     format('Loaded ~w rows from ~w~n', [N, Path]).
+
+%! column_key(+Heading, -Key) is det.
+%
+%  Spreadsheets title their columns — "Part", "Unit Cost" — and the
+%  loader matches on keys. Lower-case the heading and turn inner spaces
+%  into underscores so a heading a person typed still finds its column.
+column_key(Heading, Key) :-
+    (   atom(Heading)
+    ->  downcase_atom(Heading, Lower),
+        atomic_list_concat(Words, ' ', Lower),
+        exclude(==(''), Words, Kept),
+        atomic_list_concat(Kept, '_', Key)
+    ;   Key = Heading
+    ).
 
 %! check_required_columns(+Header, +Path) is semidet.
 %

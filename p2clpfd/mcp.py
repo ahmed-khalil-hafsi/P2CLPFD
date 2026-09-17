@@ -120,6 +120,24 @@ TOOLS = [
         },
     },
     {
+        "name": "read_rules",
+        "description": (
+            "Read back what the solver understood from the CSV, before trusting "
+            "an award: each part's demand and sourcing rules, each quote with its "
+            "effective unit cost after FX, freight and adjustments, capacity, "
+            "minimum order, share band, one-off cost and whether the supplier "
+            "passes qualification — plus portfolio-wide rules. Defaults are "
+            "filled in; an absent key means no limit. Use it to confirm the "
+            "user's rules with them in plain words ('CNS may take at most 20% "
+            "of ABC') — validate_data only reports what is wrong."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"csv_path": _CSV_ARG},
+            "required": ["csv_path"],
+        },
+    },
+    {
         "name": "analyze_sensitivity",
         "description": (
             "Answer 'where should I negotiate?'. Finds the constraints the optimal "
@@ -150,7 +168,11 @@ TOOLS = [
             "Answer 'what if?'. Compares sourcing scenarios against a baseline and "
             "returns each one's cost plus the delta. Use for questions like 'what "
             "if we dropped the dual-sourcing rule?' or 'what if supplier2 raises "
-            "prices 10%?'. Overrides do not mutate the underlying data."
+            "prices 10%?'. Overrides do not mutate the underlying data.\n\n"
+            "Write names exactly as they appear in the CSV, capitals included — "
+            "'share(ABC,TI,70,70)' means part ABC and supplier TI. In a remove "
+            "template, '_' means any value. An override the tool does not "
+            "recognise is rejected rather than ignored."
         ),
         "inputSchema": {
             "type": "object",
@@ -170,10 +192,12 @@ TOOLS = [
                                 "type": "array",
                                 "description": (
                                     "Each override is one of: "
-                                    '{"set": "cost(supplier1,part1,50)"}, '
-                                    '{"remove": "dual_source(part1)"}, '
-                                    '{"cost_delta": ["supplier2","part1",10]} (percent), '
-                                    '{"demand_delta": ["part1",10]} (percent)'
+                                    '{"set": "share(ABC,TI,70,70)"} (min/max %), '
+                                    '{"set": "cost(TI,ABC,85)"}, '
+                                    '{"remove": "dual_source(ABC)"}, '
+                                    '{"remove": "max_global_share(TI,_)"}, '
+                                    '{"cost_delta": ["TI","ABC",10]} (whole percent), '
+                                    '{"demand_delta": ["ABC",-5]} (whole percent)'
                                 ),
                                 "items": {"type": "object"},
                             },
@@ -220,13 +244,14 @@ TOOLS = [
             "Restrict awards to round percentage steps — 5 means every supplier "
             "gets a multiple of 5% of the item, so splits look like 60/30/10 "
             "rather than 37.13%. Re-solves and reports what changed.\n\n"
-            "WHEN TO OFFER THIS: a solve is slow, or the quantities per item are "
-            "large (hundreds or thousands of units). Without a grid the solver "
-            "must weigh every single unit, and that work grows with the order "
-            "quantity — a large item can take minutes. With a 5% grid there are "
-            "only 21 possible splits regardless of quantity, so it returns almost "
-            "instantly. Measured: 400 units went from 37s to 0.31s; 20,000 units "
-            "from 'did not finish' to 0.32s.\n\n"
+            "Each award is the step rounded to a whole unit, so any step works on "
+            "any quantity: 5% of 333 units is 16.65, and the award lands on 16 or "
+            "17 with the part's total still exactly 333.\n\n"
+            "WHEN TO OFFER THIS: the buyer wants round-number splits, or a heavily "
+            "constrained model (many suppliers with minimum orders, price breaks "
+            "and one-off costs) is slow. The grid shrinks each supplier's choices "
+            "to 21 levels whatever the quantity. The p2clpfd CLI applies a 5% grid "
+            "by default; these MCP tools do not.\n\n"
             "TELL THE USER THE TRADE. It is a different question, not a faster "
             "route to the same answer: when the best split falls between steps "
             "the award costs slightly more (about 0.4% in testing), and minimum "
@@ -259,6 +284,57 @@ TOOLS = [
                 },
             },
             "required": ["csv_path", "increment_pct"],
+        },
+    },
+    {
+        "name": "write_report",
+        "description": (
+            "Write the whole decision to one self-contained HTML file: the "
+            "verdict, the findings, the award, the negotiation agenda, any "
+            "scenarios, and the solver's own reasoning, stamped with the input "
+            "file's checksum. Reach for this whenever the answer has to outlive "
+            "the conversation — the user says they need to send it, share it, "
+            "present it, keep it, or defend the award later. Returns the path "
+            "and a summary, NOT the document: tell the user where the file is "
+            "and what it says. The file opens in any browser and prints to PDF."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "csv_path": _CSV_ARG,
+                "output_path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute path to write the .html file to. Pick a "
+                        "sensible name next to the CSV unless the user says "
+                        "otherwise; an existing file is overwritten."
+                    ),
+                },
+                "include_trace": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the step-by-step reasoning section. Default "
+                        "true. It costs a second, instrumented solve, so turn "
+                        "it off on a model that already solves slowly."
+                    ),
+                },
+                "scenarios": {
+                    "type": "array",
+                    "description": (
+                        "Optional what-ifs to include, same shape as "
+                        "compare_scenarios takes. A baseline is added for you."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "overrides": {"type": "array", "items": {"type": "object"}},
+                        },
+                        "required": ["name", "overrides"],
+                    },
+                },
+            },
+            "required": ["csv_path", "output_path"],
         },
     },
     {
@@ -306,9 +382,9 @@ is needed.
 | unit_cost | yes | Unit price, as a whole integer (quote cents if you need sub-unit precision). |
 | capacity | no | Max this supplier can provide of this part. |
 | moq | no | Minimum order quantity — this supplier takes 0 or at least this many. |
-| share_min | no | Min % of part demand this supplier must win if used. |
+| share_min | no | Min % of part demand this supplier must win. Any value above 0 forces the supplier into the award. |
 | share_max | no | Max % of part demand this supplier may win. |
-| share_increment | no | Award granularity, % of demand (5 -> 60/30/10 splits). Must divide 100. |
+| share_increment | no | Award granularity for this part, % of demand (5 -> 60/30/10 splits), each award rounded to a whole unit. Must divide 100. Overrides the CLI's default 5% grid. |
 | noncost_adj | no | Per-unit TCO adjustment (+/-), e.g. a logistics or quality penalty. |
 | fixed_cost | no | One-time charge incurred only when this supplier is awarded the part. |
 | min_suppliers | no | Part must be split across at least N suppliers. |
@@ -434,6 +510,11 @@ def _tool_validate_data(args: dict) -> dict:
     return _text(solver.validate())
 
 
+def _tool_read_rules(args: dict) -> dict:
+    solver = _loaded(args)
+    return _text(solver.rules())
+
+
 def _tool_analyze_sensitivity(args: dict) -> dict:
     solver = _loaded(args)
     return _text(solver.sensitivity(step=args.get("step", 1)))
@@ -487,9 +568,10 @@ def _tool_set_award_grid(args: dict) -> dict:
         return _text({
             "status": "infeasible",
             "message": (
-                f"No award is possible on a {pct}% grid. A minimum order "
-                f"quantity or capacity limit probably cannot be met in whole "
-                f"{pct}% steps. Try a finer step, or drop the grid."
+                f"No award is possible on a {pct}% grid. A share band, "
+                f"minimum order or capacity limit probably falls between the "
+                f"{pct}% steps (a 12-13% band has no 5% level). Try a finer "
+                f"step, or drop the grid."
             ),
         })
 
@@ -519,16 +601,66 @@ def _tool_solve_trace(args: dict) -> dict:
     return _text(solver.solve_trace(max_cost=args.get("max_cost"))["trace"])
 
 
+def _tool_write_report(args: dict) -> dict:
+    """
+    Render the report to disk and hand back only a summary.
+
+    Returning the document itself would spend thousands of tokens on markup
+    the agent must not read aloud anyway — the point of this tool is that the
+    user gets a file. So the reply is the path plus enough to talk about it.
+    """
+    from . import report as _report
+
+    output_path = args.get("output_path", "")
+    if not output_path:
+        return _error("write_report needs an output_path to write the file to.")
+
+    solver = _loaded(args)
+    scenarios = args.get("scenarios")
+    if scenarios:
+        scenarios = [{"name": "baseline", "overrides": []}] + list(scenarios)
+
+    payload = _report.build(
+        solver,
+        args.get("csv_path", ""),
+        scenarios=scenarios,
+        include_trace=args.get("include_trace", True),
+    )
+    try:
+        with open(output_path, "w", encoding="utf-8") as fh:
+            fh.write(_report.render_html(payload))
+    except OSError as exc:
+        return _error(f"Could not write {output_path}: {exc}")
+
+    return _text({
+        "status": "ok",
+        "written_to": output_path,
+        "tco": payload["tco"],
+        "verdict": payload["verdict"],
+        "finding_count": len(payload["findings"]),
+        "source_sha256": payload["source"]["sha256"],
+        "say_to_user": (
+            f"The full write-up is at {output_path} — open it in a browser, "
+            "and print to PDF if it needs to be attached to something. It "
+            "carries the award, what to watch, where to negotiate, and the "
+            "solver's reasoning, stamped with the checksum of the data it "
+            "came from."
+        ),
+    })
+
+
 _HANDLERS = {
     "get_advice": _tool_get_advice,
     "solve_allocation": _tool_solve_allocation,
     "validate_data": _tool_validate_data,
+    "read_rules": _tool_read_rules,
     "analyze_sensitivity": _tool_analyze_sensitivity,
     "compare_scenarios": _tool_compare_scenarios,
     "solve_multiperiod": _tool_solve_multiperiod,
     "list_disqualified": _tool_list_disqualified,
     "set_award_grid": _tool_set_award_grid,
     "solve_trace": _tool_solve_trace,
+    "write_report": _tool_write_report,
 }
 
 # ── JSON-RPC ──────────────────────────────────────────────────────────────

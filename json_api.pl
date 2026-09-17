@@ -158,7 +158,7 @@ solve_with_trace_ws(WebSocket) :-
     send_ws_domains(WebSocket, RawAlloc, "initial"),
     send_ws(WebSocket, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO), ff], Vars)
+    (   minimize_cost(TCO, Vars)
     ->  materialize(RawAlloc, Allocation),
         send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
         send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
@@ -178,7 +178,7 @@ solve_with_trace_ws(WebSocket, MaxCost) :-
     send_ws_domains(WebSocket, RawAlloc, "initial"),
     send_ws(WebSocket, _{event:"phase", phase:"searching"}),
 
-    (   labeling([min(TCO), ff], Vars)
+    (   minimize_cost(TCO, Vars)
     ->  materialize(RawAlloc, Allocation),
         send_ws_domains_ground(WebSocket, Allocation, TCO, "final"),
         send_ws(WebSocket, _{event:"phase", phase:"optimal"}),
@@ -199,9 +199,7 @@ send_ws_domains(WebSocket, RawAlloc, Phase) :-
               string_concat("q.", SStr, T1),
               string_concat(T1, ".", T2),
               string_concat(T2, PStr, QName),
-              fd_dom(Q, Dom),
-              dom_to_list(Dom, List),
-              D = _{name:QName, domain:List}
+              domain_json(QName, Q, D)
             ),
             Vars),
     send_ws(WebSocket, _{event:"domain_snapshot", phase:Phase, vars:Vars}).
@@ -218,7 +216,7 @@ send_ws_domains_ground(WebSocket, Allocation, TCO, Phase) :-
               string_concat("q.", SStr, T1),
               string_concat(T1, ".", T2),
               string_concat(T2, PStr, QName),
-              D = _{name:QName, domain:[Q]}
+              domain_json(QName, Q, D)
             ),
             QVars),
     send_ws(WebSocket, _{event:"domain_snapshot", phase:Phase,
@@ -324,10 +322,14 @@ scenarios_to_json(Results, JSON) :-
 
 %! json_to_scenarios(+JSONScenarios, -ScenarioList) is det.
 %  Converts JSON scenario objects to Prolog Name-Overrides pairs.
+%  "overrides" may be omitted; a scenario without it is the baseline.
 json_to_scenarios([], []).
 json_to_scenarios([H|T], [Name-Overrides|Rest]) :-
     get_dict(name, H, Name),
-    get_dict(overrides, H, JSONOverrides),
+    (   get_dict(overrides, H, JSONOverrides)
+    ->  true
+    ;   JSONOverrides = []
+    ),
     json_overrides_to_prolog(JSONOverrides, Overrides),
     json_to_scenarios(T, Rest).
 
@@ -336,18 +338,56 @@ json_overrides_to_prolog([H|T], [Override|Rest]) :-
     json_override_to_prolog(H, Override),
     json_overrides_to_prolog(T, Rest).
 
+%! json_override_to_prolog(+JSON, -Override) is det.
+%
+%  Names arrive as text and must become atoms, because that is what the
+%  loaded facts hold: the string "ti" does not unify with the atom ti, and
+%  an override on it would silently change nothing. An override this
+%  does not recognise is an error for the same reason.
 json_override_to_prolog(JSON, Override) :-
-    (   get_dict(set, JSON, FactStr)
-    ->  term_string(Fact, FactStr),
+    (   get_dict(set, JSON, FactText)
+    ->  override_term(FactText, Fact),
         Override = set(Fact)
-    ;   get_dict(remove, JSON, TemplateStr)
-    ->  term_string(Template, TemplateStr),
+    ;   get_dict(remove, JSON, TemplateText)
+    ->  override_term(TemplateText, Template),
         Override = remove(Template)
-    ;   get_dict(cost_delta, JSON, [Supplier, Part, Pct])
-    ->  Override = cost_delta(Supplier, Part, Pct)
-    ;   get_dict(demand_delta, JSON, [Part, Pct])
-    ->  Override = demand_delta(Part, Pct)
+    ;   get_dict(cost_delta, JSON, [Supplier0, Part0, Pct])
+    ->  atom_string(Supplier, Supplier0),
+        atom_string(Part, Part0),
+        Override = cost_delta(Supplier, Part, Pct)
+    ;   get_dict(demand_delta, JSON, [Part0, Pct])
+    ->  atom_string(Part, Part0),
+        Override = demand_delta(Part, Pct)
+    ;   throw(error(domain_error(scenario_override, JSON), _))
     ).
+
+%! override_term(+Text, -Term) is det.
+%
+%  Parse a fact written as text, reading every name as a name.
+%
+%  Prolog reads a capitalised word as a VARIABLE, and part numbers are
+%  capitalised — "share(ABC,ti,70,70)" would otherwise mean "the share of
+%  any part at all", and the solve died with "Arguments are not
+%  sufficiently instantiated". So each named variable is bound to the atom
+%  it spells. Only `_` and `_Name` stay variables: they are how a remove/1
+%  template says "any value" (remove(max_global_share(supplier2,_))).
+override_term(Text, Term) :-
+    term_string(Term, Text, [variable_names(Bindings)]),
+    maplist(bind_name_as_atom, Bindings).
+
+bind_name_as_atom(Name=Var) :-
+    (   sub_atom(Name, 0, 1, _, '_')
+    ->  true
+    ;   Var = Name
+    ).
+
+%! compare_scenario_dicts_to_json(+Scenarios, -JSON) is det.
+%  Entry point for callers that hold scenarios as data (Python dicts via
+%  janus). Nothing is pasted into query text, so no name can break it.
+compare_scenario_dicts_to_json(Scenarios, JSON) :-
+    json_to_scenarios(Scenarios, ScenarioList),
+    compare_scenarios(ScenarioList, Results),
+    scenarios_to_json(Results, JSON).
 
 %% ------------------------------------------------------------------ %%
 %%  STANDALONE JSON (no HTTP)                                          %%
@@ -437,3 +477,110 @@ scenarios_json(Path, Scenarios, JSON) :-
 compare_scenarios_to_json(Scenarios, JSON) :-
     compare_scenarios(Scenarios, Results),
     scenarios_to_json(Results, JSON).
+
+%% ------------------------------------------------------------------ %%
+%%  RULES READ BACK                                                    %%
+%% ------------------------------------------------------------------ %%
+%
+%  "The rules are the model" is only a promise if a buyer can see the
+%  model. validate/1 speaks up when something is wrong; this says what
+%  was understood, with the defaults the solver will apply filled in, so
+%  a sign-off is on the rules that run — not on a reading of the CSV.
+%  Only rules that are present appear; an absent key means "no limit".
+
+%! rules_to_json(-JSON) is det.
+rules_to_json(_{parts:PartsJSON, suppliers:SuppliersJSON, portfolio:Portfolio}) :-
+    parts(Parts),
+    suppliers(Suppliers),
+    findall(J, ( member(P, Parts), part_rules_json(P, Suppliers, J) ), PartsJSON),
+    findall(J, ( member(S, Suppliers), supplier_rules_json(S, J) ), SuppliersJSON),
+    portfolio_rules_json(Portfolio).
+
+part_rules_json(P, Suppliers, J) :-
+    demand(P, D),
+    min_suppliers_of(P, MinN),
+    findall(Q, ( member(S, Suppliers), allocatable(P, S),
+                 quote_rules_json(P, S, Q) ),
+            Quotes),
+    findall(K-V,
+            (   K = max_suppliers, max_suppliers(P, V)
+            ;   K = dual_source, dual_source(P), V = true
+            ;   K = award_step_pct, once(share_increment_of(P, V))
+            ;   K = max_lead_time_days, max_lead_time(P, V)
+            ;   K = required_certifications,
+                findall(C, required_certification(P, C), V), V \== []
+            ),
+            Optional),
+    rules_dict([part-P, demand-D, min_suppliers-MinN, quotes-Quotes|Optional], J).
+
+quote_rules_json(P, S, J) :-
+    share_of(P, S, SMin, SMax),
+    (   qualified(P, S) -> Qualified = true ; Qualified = false ),
+    findall(K-V,
+            (   K = unit_cost, cost(S, P, V)
+            ;   K = price_tiers, has_tiers(S, P),
+                findall(_{from:Mn, to:To, unit_cost:C},
+                        ( price_tier(S, P, Mn, Mx, C),
+                          ( Mx == sup -> To = null ; To = Mx ) ),
+                        V)
+            ;   K = lowest_landed_unit_cost, unit_cost_floor(S, P, V)
+            ;   K = capacity, capacity_of(S, P, V), V \== sup
+            ;   K = moq, moq(S, P, V), V > 0
+            ;   K = share_min_pct, SMin > 0, V = SMin
+            ;   K = share_max_pct, SMax < 100, V = SMax
+            ;   K = fixed_cost, fixed_cost(S, P, V)
+            ;   K = lead_time_days, lead_time(S, P, V)
+            ;   K = excluded_because,
+                findall(Str, ( disqualified(P, S, R),
+                               reason_phrase(R, Ph),
+                               format(string(Str), "~w", [Ph]) ),
+                        V0),
+                sort(V0, V), V \== []
+            ),
+            Optional),
+    rules_dict([supplier-S, qualified-Qualified|Optional], J).
+
+supplier_rules_json(S, J) :-
+    findall(K-V,
+            (   K = global_capacity, global_capacity(S, V)
+            ;   K = max_share_of_total_pct, max_global_share(S, V)
+            ;   K = rebate, rebate(S, Th, Pct), V = _{threshold:Th, pct:Pct}
+            ;   K = otif_pct, otif(S, V)
+            ;   K = region, region(S, V)
+            ;   K = fx_rate_pct, region(S, R), fx_rate(R, V)
+            ;   K = logistics_per_unit, region(S, R), logistics_cost(R, V)
+            ;   K = noncost_adjustment, noncost_adjustment(S, V)
+            ;   K = certifications,
+                findall(C, certification(S, C), V), V \== []
+            ;   K = route, supplier_route(S, V)
+            ),
+            Optional),
+    rules_dict([supplier-S|Optional], J).
+
+portfolio_rules_json(J) :-
+    findall(K-V,
+            (   K = min_otif_pct, min_otif(V)
+            ;   K = required_certifications,
+                findall(C, required_certification(C), V), V \== []
+            ;   K = route_capacity,
+                findall(_{route:R, capacity:C}, route_capacity(R, C), V), V \== []
+            ;   K = route_share_cap,
+                findall(_{route:R, max_pct:C}, max_route_share(R, C), V), V \== []
+            ;   K = default_award_step_pct, share_increment(V)
+            ),
+            Optional),
+    rules_dict(Optional, J).
+
+%  First value per key wins, so a stray duplicate fact cannot make
+%  dict_pairs/3 throw.
+rules_dict(Pairs, Dict) :-
+    first_per_key(Pairs, [], Unique),
+    dict_pairs(Dict, _, Unique).
+
+first_per_key([], _, []).
+first_per_key([K-V|Rest], Seen, Out) :-
+    (   memberchk(K, Seen)
+    ->  Out = Out1
+    ;   Out = [K-V|Out1]
+    ),
+    first_per_key(Rest, [K|Seen], Out1).

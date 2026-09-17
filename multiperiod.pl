@@ -52,7 +52,7 @@ solve_multiperiod(Plan, TCO) :-
     mp_periods(Periods),
     suppliers(Suppliers),
     mp_build(Parts, Periods, Suppliers, RawPlan, Vars, TCO),
-    labeling([min(TCO), ff], Vars),
+    minimize_cost(TCO, Vars),
     mp_materialize(RawPlan, Plan).
 
 mp_parts(Parts) :-

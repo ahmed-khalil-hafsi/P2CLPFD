@@ -81,6 +81,16 @@ def _ensure_loaded() -> None:
 #: other column in a P2CLPFD CSV feeds an integer CLP(FD) domain, so a decimal
 #: there does not fail at load — it crashes the engine at solve time with an
 #: opaque ``Type error: 'integer' expected``. See :func:`_check_integer_economics`.
+#: Columns the loader reads as integers; text there cannot mean anything.
+_NUMERIC_COLUMNS = frozenset({
+    "demand", "unit_cost", "capacity", "moq", "share_min", "share_max",
+    "share_increment", "noncost_adj", "fixed_cost", "min_suppliers",
+    "max_suppliers", "lead_time", "max_lead_time", "global_capacity",
+    "global_share_cap", "otif", "min_otif", "fx_rate", "logistics_cost",
+    "rebate_threshold", "rebate_pct", "period", "holding_cost",
+    "route_capacity", "route_share_cap",
+})
+
 _NON_NUMERIC_COLUMNS = frozenset({
     "part", "supplier", "region", "route",
     "certifications", "required_certs", "dual_source",
@@ -99,18 +109,40 @@ def _check_integer_economics(path: str) -> None:
         ValueError: a numeric column holds a non-integer number.
     """
     try:
-        fh = open(path, newline="")
+        fh = open(path, newline="", encoding="utf-8-sig")
     except OSError:
         return  # let the Prolog loader raise the real parse error
     with fh:
         try:
-            reader = _csv.DictReader(fh)
-            rows = list(reader)
-        except _csv.Error:
+            lines = [r for r in _csv.reader(fh)]
+        except (_csv.Error, UnicodeDecodeError):
             return
+    if not lines:
+        return
+    # Same normalisation as column_key/2 in csv_loader.pl.
+    header = ["_".join(h.strip().lower().split()) for h in lines[0]]
+    missing = [c for c in ("part", "supplier") if c not in header]
+    if missing:
+        found = ", ".join(h for h in header if h) or "nothing"
+        raise ValueError(
+            f"this is not a P2CLPFD sourcing file: it needs "
+            f"{' and '.join(missing)} column{'s' if len(missing) > 1 else ''} "
+            f"(found: {found})"
+        )
+    # A spreadsheet export that trims trailing empty cells leaves short
+    # rows. The Prolog reader rejects them as "row_arity(8) expected,
+    # found 7", which names neither the row nor the fix.
+    for number, cells in enumerate(lines[1:], start=2):
+        if cells and len(cells) != len(header):
+            raise ValueError(
+                f"line {number} has {len(cells)} values but the header has "
+                f"{len(header)} columns — every row needs one value per "
+                f"column (leave a cell empty with a bare comma)"
+            )
+    rows = [dict(zip(header, cells)) for cells in lines[1:] if cells]
     for row in rows:
         for col, val in row.items():
-            if col is None or col.strip().lower() in _NON_NUMERIC_COLUMNS:
+            if col in _NON_NUMERIC_COLUMNS:
                 continue
             val = (val or "").strip()
             if not val:
@@ -120,11 +152,18 @@ def _check_integer_economics(path: str) -> None:
                 continue
             except ValueError:
                 pass
+            who = f"{row.get('supplier', '?')}/{row.get('part', '?')}"
             try:
                 float(val)
             except ValueError:
-                continue  # free-text (e.g. a cert name in an odd column)
-            who = f"{row.get('supplier', '?')}/{row.get('part', '?')}"
+                if col in _NUMERIC_COLUMNS:
+                    raise ValueError(
+                        f"{col} for {who} is {val!r}, which is not a whole "
+                        "number — write it without currency signs, "
+                        "thousands separators or units (1000000, not "
+                        "1,000,000 or $80)."
+                    ) from None
+                continue  # a column the loader does not read
             raise ValueError(
                 f"{col.strip()} for {who} is {val} — P2CLPFD uses integer "
                 "economics; multiply by 100 if you need finer precision "
@@ -132,43 +171,70 @@ def _check_integer_economics(path: str) -> None:
             )
 
 
-def _quote_atom(text: str) -> str:
-    """Render an arbitrary string as a quoted Prolog atom.
+_OVERRIDE_SHAPES = {
+    "set": "a fact as text, e.g. \"share(ABC,ti,70,70)\"",
+    "remove": "a fact as text, e.g. \"dual_source(ABC)\"",
+    "cost_delta": "[supplier, part, percent], e.g. [\"TI\", \"ABC\", 10]",
+    "demand_delta": "[part, percent], e.g. [\"ABC\", -5]",
+}
 
-    Scenario names are agent-supplied free text (``"C +10% on MCC"``);
-    interpolated raw into a ``Name-Overrides`` pair they break the Prolog
-    parser. Quoting lets any string through as a valid atom that round-trips
-    back out unchanged in the JSON results.
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _check_scenarios(scenarios: Any) -> list[dict]:
     """
-    escaped = str(text).replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
+    Validate scenarios and return them as plain data for Prolog.
 
+    They used to be pasted into the query as text, which broke on any
+    capitalised name (Prolog reads ``ABC`` as a variable) and silently
+    ignored an override it did not recognise — a scenario that changed
+    nothing, reported as if it had. Now they travel as data, names are
+    turned into atoms on the Prolog side, and anything malformed is
+    rejected here with a message that says what was expected.
 
-def _overrides_to_prolog(overrides: list[dict]) -> str:
-    """Convert Python override dicts to a Prolog list of override terms."""
-    parts = []
-    for ov in overrides:
-        if "set" in ov:
-            parts.append(f"set({ov['set']})")
-        elif "remove" in ov:
-            parts.append(f"remove({ov['remove']})")
-        elif "cost_delta" in ov:
-            s, p, pct = ov["cost_delta"]
-            parts.append(f"cost_delta({s},{p},{pct})")
-        elif "demand_delta" in ov:
-            p, pct = ov["demand_delta"]
-            parts.append(f"demand_delta({p},{pct})")
-    return "[" + ",".join(parts) + "]"
-
-
-def _scenarios_to_prolog(scenarios: list[dict]) -> str:
-    """Convert Python scenario dicts to a Prolog list of Name-Overrides pairs."""
-    parts = []
-    for sc in scenarios:
-        name = sc["name"]
-        overrides = _overrides_to_prolog(sc.get("overrides", []))
-        parts.append(f"{_quote_atom(name)}-{overrides}")
-    return "[" + ",".join(parts) + "]"
+    Raises:
+        ValueError: a scenario or override is not in a usable shape.
+    """
+    if not isinstance(scenarios, list):
+        raise ValueError("scenarios must be a list of {name, overrides}")
+    checked = []
+    for i, sc in enumerate(scenarios):
+        if not isinstance(sc, dict) or "name" not in sc:
+            raise ValueError(f"scenario {i + 1} needs a name")
+        name = str(sc["name"])
+        overrides = sc.get("overrides") or []
+        if not isinstance(overrides, list):
+            raise ValueError(f"scenario {name!r}: overrides must be a list")
+        clean = []
+        for ov in overrides:
+            keys = list(ov) if isinstance(ov, dict) else []
+            if len(keys) != 1 or keys[0] not in _OVERRIDE_SHAPES:
+                raise ValueError(
+                    f"scenario {name!r}: {ov!r} is not an override. Use one of "
+                    + "; ".join(f"{k}: {v}" for k, v in _OVERRIDE_SHAPES.items())
+                )
+            kind, value = keys[0], ov[keys[0]]
+            if kind in ("set", "remove"):
+                ok = isinstance(value, str) and janus.query_once(
+                    'catch(term_string(_T, Text), _, fail)', {'Text': value}
+                ).get("truth") is not False
+            elif kind == "cost_delta":
+                ok = (isinstance(value, list) and len(value) == 3
+                      and all(isinstance(v, str) for v in value[:2])
+                      and _is_int(value[2]))
+            else:
+                ok = (isinstance(value, list) and len(value) == 2
+                      and isinstance(value[0], str) and _is_int(value[1]))
+            if not ok:
+                raise ValueError(
+                    f"scenario {name!r}: {kind} needs {_OVERRIDE_SHAPES[kind]}"
+                    f" (percents are whole numbers), got {value!r}"
+                )
+            clean.append({kind: value})
+        checked.append({"name": name, "overrides": clean})
+    return checked
 
 
 #: Fields that carry Prolog's `null` atom when they do not apply — a
@@ -192,6 +258,19 @@ def _nulls_to_none(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_nulls_to_none(v) for v in value]
+    return value
+
+
+def _flags_to_bools(value: Any) -> Any:
+    """janus hands Prolog's true/false atoms over as strings."""
+    if isinstance(value, dict):
+        return {
+            k: ({"true": True, "false": False}.get(v, v)
+                if k in ("qualified", "dual_source") else _flags_to_bools(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_flags_to_bools(v) for v in value]
     return value
 
 
@@ -225,6 +304,9 @@ class Solver:
 
     def __init__(self) -> None:
         _ensure_loaded()
+        #: What set_award_grid() did, or None. Mutated in place when the
+        #: default grid has to be dropped, so callers holding it see that.
+        self.award_grid: Optional[dict] = None
 
     def load_csv(self, path: str) -> dict:
         """
@@ -263,6 +345,7 @@ class Solver:
         # depending on version; treat either as a failed load.
         if result is None or result.get("truth") is False:
             raise ValueError(f"could not parse {path} as procurement CSV")
+        self.award_grid = None  # the load cleared any grid facts
         return {"status": "ok", "path": path}
 
     def solve(self, max_cost: Optional[int] = None) -> Optional[dict]:
@@ -280,6 +363,28 @@ class Solver:
                 - "allocations": List of {part, suppliers} dicts
             Returns None if no feasible allocation exists.
         """
+        result = self._solve(max_cost)
+        grid = self.award_grid
+        if (result is None and grid and grid.get("requested")
+                and not grid.get("dropped")):
+            # The default grid is a speed setting, not one of the buyer's
+            # rules. If it alone rules out every award (a 12-13% share band
+            # has no 5% level), saying "no award satisfies your rules" would
+            # be false. Drop it and search every quantity instead; a grid
+            # the file itself sets is a rule, and stays.
+            janus.query_once('retractall(share_increment(_))')
+            result = self._solve(max_cost)
+            if result is None:
+                janus.query_once(
+                    'assertz(share_increment(Pct))',
+                    {'Pct': grid["requested"]}
+                )
+            else:
+                grid["dropped"] = True
+        return result
+
+    def _solve(self, max_cost: Optional[int] = None) -> Optional[dict]:
+        """One solve against exactly the facts currently loaded."""
         if max_cost is not None:
             result = janus.query_once(
                 'solve_to_json(MaxCost, JSON)',
@@ -322,9 +427,29 @@ class Solver:
             >>> print(results["results"][1]["tco"])
             13742
         """
-        prolog_scenarios = _scenarios_to_prolog(scenarios)
+        checked = _check_scenarios(scenarios)
+        report = self._compare(checked)
+        grid = self.award_grid
+        if (grid and grid.get("requested") and not grid.get("dropped")
+                and any(r.get("status") != "ok"
+                        for r in report.get("results", []))):
+            # Same reasoning as solve(): the default grid must not be the
+            # reason a scenario reads "infeasible". Re-run the whole
+            # comparison without it so every row is on the same footing.
+            janus.query_once('retractall(share_increment(_))')
+            exact = self._compare(checked)
+            if any(r.get("status") == "ok" for r in exact.get("results", [])):
+                grid["dropped"] = True
+                return exact
+            janus.query_once(
+                'assertz(share_increment(Pct))', {'Pct': grid["requested"]}
+            )
+        return report
+
+    def _compare(self, scenarios: list[dict]) -> dict:
         result = janus.query_once(
-            f'compare_scenarios_to_json({prolog_scenarios}, JSON)'
+            'compare_scenario_dicts_to_json(Scenarios, JSON)',
+            {'Scenarios': scenarios}
         )
         return result.get("JSON", {"results": [], "deltas": []})
 
@@ -346,6 +471,22 @@ class Solver:
         """
         result = janus.query_once('validate_to_json(JSON)')
         return result.get("JSON", {"status": "error", "issues": []})
+
+    def rules(self) -> dict:
+        """
+        The loaded model, read back: what the solver will actually enforce.
+
+        validate() only speaks when something is wrong. This says what was
+        understood — with defaults filled in and landed costs computed — so
+        a buyer can sign off on the rules that run rather than on their own
+        reading of the CSV. A key that is absent means "no limit".
+
+        Returns:
+            Dict with "parts" (each with its quotes), "suppliers" and
+            "portfolio". Flags are real booleans.
+        """
+        result = janus.query_once('rules_to_json(JSON)')
+        return _flags_to_bools(result.get("JSON", {}))
 
     def solve_multiperiod(self) -> Optional[dict]:
         """
@@ -429,6 +570,27 @@ class Solver:
             Dict with "verdict", "findings", and "tco". See
             p2clpfd.judgment.advise for the finding schema.
         """
+        return self.assess(sensitivity_step=sensitivity_step)["advice"]
+
+    def assess(self, sensitivity_step: int = 1) -> dict:
+        """
+        Run the whole reading of one decision and keep every piece of it.
+
+        :meth:`advise` answers "what should I do?" and throws the rest away.
+        A report has to show the award, the data check and the priced
+        constraints alongside the findings — and must not pay for a second
+        solve to get them, because on a large model that is minutes.
+
+        Args:
+            sensitivity_step: Relaxation size for quantity constraints when
+                computing shadow prices.
+
+        Returns:
+            Dict with "validation", "solution" (None when infeasible),
+            "sensitivity" (None when there is no solution to price),
+            "disqualified", "rebates", "solve_seconds", and "advice" —
+            the judgment layer's verdict and findings over all of it.
+        """
         import time
         from .judgment import advise as _advise
 
@@ -437,15 +599,25 @@ class Solver:
         solution = self.solve()
         solve_seconds = time.perf_counter() - started
         sensitivity = self.sensitivity(sensitivity_step) if solution else None
-        return _advise(
-            solution=solution,
-            validation=validation,
-            sensitivity=sensitivity,
-            disqualified=self.disqualified(),
-            rebates=self.rebates(),
-            solve_seconds=solve_seconds,
-            has_increment=self.has_award_grid(),
-        )
+        disqualified = self.disqualified()
+        rebates = self.rebates()
+        return {
+            "validation": validation,
+            "solution": solution,
+            "sensitivity": sensitivity,
+            "disqualified": disqualified,
+            "rebates": rebates,
+            "solve_seconds": solve_seconds,
+            "advice": _advise(
+                solution=solution,
+                validation=validation,
+                sensitivity=sensitivity,
+                disqualified=disqualified,
+                rebates=rebates,
+                solve_seconds=solve_seconds,
+                has_increment=self.has_award_grid(),
+            ),
+        }
 
     def solve_with_grid(self, increment_pct: int) -> Optional[dict]:
         """
@@ -465,14 +637,71 @@ class Solver:
             raise ValueError(
                 f"award step must divide 100; {increment_pct} does not"
             )
+        saved = janus.query_once(
+            'findall(_P, share_increment(_P), Saved)'
+        ).get("Saved", [])
         janus.query_once(
             'retractall(share_increment(_)), assertz(share_increment(Pct))',
             {'Pct': increment_pct}
         )
         try:
-            return self.solve()
+            # _solve, not solve: an explicitly requested grid must never be
+            # quietly dropped the way the default one may be.
+            return self._solve()
         finally:
             janus.query_once('retractall(share_increment(_))')
+            for pct in saved:
+                janus.query_once(
+                    'assertz(share_increment(Pct))', {'Pct': pct}
+                )
+
+    def set_award_grid(self, increment_pct: Optional[int]) -> dict:
+        """
+        Set the default award grid: whole percentage steps of each part's demand.
+
+        The grid is the single biggest performance lever there is — three
+        suppliers with no capacity bounds do not finish over a million units,
+        and the same model on a 5% grid solves in a tenth of a second — so the
+        CLI turns it on by default. Each award is the step rounded to a whole
+        unit (see share_grid/4 in solver.pl), so any step works on any demand.
+
+        A `share_increment` column in the CSV is part of the buyer's rules and
+        always wins for its part; this only sets the step for parts without
+        one. Passing None or 0 removes the default, not those per-part rules.
+
+        Args:
+            increment_pct: Award step as a percent of demand, or None/0 for no
+                default grid.
+
+        Returns:
+            Dict with "requested" (the default step, or None) and "per_part"
+            ({part: pct}) — the steps the file set for itself.
+
+        Raises:
+            ValueError: the step does not divide 100.
+        """
+        if increment_pct and 100 % increment_pct != 0:
+            raise ValueError(
+                f"award step must divide 100; {increment_pct} does not"
+            )
+        janus.query_once('retractall(share_increment(_))')
+        if increment_pct:
+            janus.query_once(
+                'assertz(share_increment(Pct))', {'Pct': increment_pct}
+            )
+        # Template variables are underscore-prefixed on purpose: janus hands
+        # back every variable in the query, and an unbound one fails to
+        # convert with "Arguments are not sufficiently instantiated".
+        result = janus.query_once(
+            'findall([_P,_S], share_increment(_P,_S), Rows)'
+        )
+        return {
+            "requested": increment_pct or None,
+            "per_part": {
+                str(part): int(step)
+                for part, step in (result or {}).get("Rows", [])
+            },
+        }
 
     def has_award_grid(self) -> bool:
         """Whether awards are restricted to a percentage grid."""

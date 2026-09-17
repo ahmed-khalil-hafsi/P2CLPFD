@@ -11,6 +11,7 @@ skipped when the solver cannot be imported.
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import tempfile
@@ -314,16 +315,42 @@ class TestMCP(unittest.TestCase):
         self.assertGreaterEqual(comp["extra_cost"], 0)
         self.assertTrue(comp["say_to_user"])
 
-    def test_impossible_grid_explains_itself_rather_than_just_failing(self):
-        # 25% of nut's 15 units is 3.75, so only 0 or all-of-it lands on the
-        # grid — which collides with needing two suppliers.
+    def test_a_step_coarser_than_the_part_still_awards(self):
+        # 25% of nut's 15 units is 3.75. Awards round to whole units, so the
+        # two suppliers nut needs can take 8 and 7.
         responses = _mcp([
             _tool_call(1, "set_award_grid",
                        {"csv_path": TINY, "increment_pct": 25}),
         ])
         result = json.loads(_tool_text(responses[1]))
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["tco"], 381)
+
+    def test_impossible_grid_explains_itself_rather_than_just_failing(self):
+        # A 12-13% band has no 5% level. An explicitly requested grid is
+        # never dropped, so this must be reported, and explained.
+        with tempfile.NamedTemporaryFile("w", suffix=".csv",
+                                         delete=False) as fh:
+            fh.write("part,supplier,demand,unit_cost,share_min,share_max\n"
+                     "bolt,alpha,100,10,12,13\nbolt,beta,100,12,,\n")
+        self.addCleanup(os.unlink, fh.name)
+        responses = _mcp([
+            _tool_call(1, "set_award_grid",
+                       {"csv_path": fh.name, "increment_pct": 5}),
+        ])
+        result = json.loads(_tool_text(responses[1]))
         self.assertEqual(result["status"], "infeasible")
         self.assertIn("finer step", result["message"])
+
+    def test_read_rules_reports_the_model(self):
+        responses = _mcp([
+            _tool_call(1, "read_rules", {"csv_path": TINY}),
+        ])
+        rules = json.loads(_tool_text(responses[1]))
+        self.assertEqual([p["part"] for p in rules["parts"]], ["bolt", "nut"])
+        alpha = rules["parts"][0]["quotes"][0]
+        self.assertEqual((alpha["supplier"], alpha["capacity"],
+                          alpha["share_max_pct"]), ("alpha", 12, 70))
 
     def test_award_grid_rejects_a_step_that_cannot_divide_100(self):
         # 3% can never sum to 100%, so the model would be quietly infeasible.
@@ -432,6 +459,429 @@ class TestMCPResources(unittest.TestCase):
              "params": {"uri": "p2clpfd://nope"}},
         ])
         self.assertIn("error", responses[1])
+
+
+@unittest.skipUnless(AVAILABLE, "requires SWI-Prolog + janus-swi")
+class TestReport(unittest.TestCase):
+    """`report` is the one command whose output leaves the machine, so these
+    pin the things a recipient depends on: the file exists, it is standalone,
+    and it says the same number as every other surface."""
+
+    def test_writes_a_standalone_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "award.html")
+            _, said, _ = _cli("report", TINY, "-o", out, expect=EXIT_OK)
+            self.assertIn(out, said)
+            html = pathlib.Path(out).read_text()
+        self.assertTrue(html.startswith("<!DOCTYPE html>"))
+        self.assertIn("367", html)
+        for forbidden in ("http://", "https://", "<script", "<img"):
+            self.assertNotIn(forbidden, html)
+
+    def test_goes_to_stdout_when_no_file_is_named(self):
+        _, out, _ = _cli("report", TINY, "--no-trace", expect=EXIT_OK)
+        self.assertTrue(out.lstrip().startswith("<!DOCTYPE html>"))
+
+    def test_json_carries_the_same_decision_as_the_document(self):
+        _, raw, _ = _cli("report", TINY, "--json", "--no-trace", expect=EXIT_OK)
+        payload = json.loads(raw)
+        self.assertEqual(payload["tco"], 367)
+        self.assertEqual(payload["allocation"]["tco"], 367)
+        self.assertEqual(payload["summary"]["awarded"], 367)
+        self.assertTrue(payload["verdict"])
+        self.assertTrue(payload["source"]["sha256"])
+        self.assertIsNone(payload["trace"])
+
+    def test_the_checksum_is_of_the_file_it_read(self):
+        import hashlib
+        _, raw, _ = _cli("report", TINY, "--json", "--no-trace", expect=EXIT_OK)
+        expected = hashlib.sha256(pathlib.Path(TINY).read_bytes()).hexdigest()
+        self.assertEqual(json.loads(raw)["source"]["sha256"], expected)
+
+    def test_the_reasoning_section_is_included_by_default(self):
+        _, raw, _ = _cli("report", TINY, "--json", expect=EXIT_OK)
+        trace = json.loads(raw)["trace"]
+        self.assertTrue(trace["phases"])
+        self.assertIn("bolt", trace["parts"])
+
+    def test_scenarios_are_included_when_asked_for(self):
+        _, raw, _ = _cli(
+            "report", TINY, "--json", "--no-trace",
+            "--scenario", 'open_up:[{"remove": "min_suppliers(bolt,_)"}]',
+            expect=EXIT_OK,
+        )
+        names = {r["name"] for r in json.loads(raw)["scenarios"]["results"]}
+        self.assertEqual(names, {"baseline", "open_up"})
+
+    def test_an_infeasible_model_still_gets_a_document(self):
+        # The report is most valuable exactly here — it records which rule
+        # is impossible — but the exit code must still say "no award".
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = os.path.join(tmp, "broken.csv")
+            with open(csv_path, "w") as fh:
+                fh.write("part,supplier,demand,unit_cost,capacity,moq\n")
+                fh.write("widget,alpha,100,10,50,80\n")   # MOQ 80 > capacity 50
+            out = os.path.join(tmp, "award.html")
+            code, _, _ = _cli("report", csv_path, "-o", out, "--no-trace")
+            self.assertEqual(code, EXIT_NO_ANSWER)
+            html = pathlib.Path(out).read_text()
+        self.assertIn("No feasible award", html)
+
+    def test_an_unwritable_path_fails_loudly(self):
+        code, _, err = _cli("report", TINY, "-o", "/nonexistent/dir/award.html")
+        self.assertEqual(code, EXIT_BAD_INPUT)
+        self.assertIn("could not write", err)
+
+
+@unittest.skipUnless(AVAILABLE, "requires SWI-Prolog + janus-swi")
+class TestMCPWriteReport(unittest.TestCase):
+    def test_writes_the_file_and_returns_only_a_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "award.html")
+            responses = _mcp([_tool_call(1, "write_report", {
+                "csv_path": TINY, "output_path": out, "include_trace": False,
+            })])
+            reply = json.loads(_tool_text(responses[1]))
+            self.assertEqual(reply["written_to"], out)
+            self.assertEqual(reply["tco"], 367)
+            self.assertTrue(reply["say_to_user"])
+            # The document must not come back through the agent's context.
+            self.assertNotIn("<!DOCTYPE", _tool_text(responses[1]))
+            self.assertTrue(
+                pathlib.Path(out).read_text().startswith("<!DOCTYPE html>")
+            )
+
+    def test_a_missing_output_path_is_an_error(self):
+        responses = _mcp([_tool_call(1, "write_report", {"csv_path": TINY})])
+        self.assertTrue(responses[1]["result"]["isError"])
+
+
+def _write_csv(case: unittest.TestCase, text: str) -> str:
+    """A throwaway CSV that is removed when the test finishes."""
+    fh = tempfile.NamedTemporaryFile(
+        "w", suffix=".csv", delete=False, encoding="utf-8"
+    )
+    fh.write(text)
+    fh.close()
+    case.addCleanup(os.unlink, fh.name)
+    return fh.name
+
+
+#: A real-shaped sourcing event: an uppercase part number, a million
+#: units, three suppliers with no capacity figures, dual sourcing, and a
+#: low-cost supplier held to 20%. Every one of those tripped the tool the
+#: first time a buyer used it.
+MCU_EVENT = (
+    "part,supplier,demand,unit_cost,share_min,share_max,dual_source\n"
+    "ABC,infineon,1000000,100,,,1\n"
+    "ABC,ti,1000000,89,,,\n"
+    "ABC,CNS,1000000,80,0,20,\n"
+)
+
+
+@unittest.skipUnless(AVAILABLE, "SWI-Prolog / janus-swi not installed")
+class TestAwardGrid(unittest.TestCase):
+    """
+    The award grid is on by default, so these pin the ways a default can go
+    wrong: claiming more than it proved, and being WRONG where it should
+    at worst be slow.
+    """
+
+    def test_default_grid_awards_the_mcu_event(self):
+        # CNS takes its 20% ceiling at 80, ti the rest at 89.
+        _, out, _ = _cli("solve", _write_csv(self, MCU_EVENT), "--json",
+                         expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 87_200_000)
+
+    def test_grid_is_disclosed_on_stderr_and_json_stays_clean(self):
+        """
+        A gridded award is optimal ON THE GRID, which is a smaller claim
+        than optimal — so a run has to admit it. It goes to stderr so it
+        can never corrupt --json or a piped report.
+        """
+        _, out, err = _cli("solve", _write_csv(self, MCU_EVENT), "--json",
+                           expect=EXIT_OK)
+        self.assertIn("5% steps", err)
+        json.loads(out)  # would raise if the note leaked into stdout
+
+    def test_increment_zero_turns_the_grid_off(self):
+        _, out, err = _cli("solve", TINY, "--increment", "0", "--json",
+                           expect=EXIT_OK)
+        self.assertEqual(err.strip(), "")
+        self.assertEqual(json.loads(out)["tco"], 367)
+
+    def test_a_step_that_does_not_divide_demand_rounds_instead_of_failing(self):
+        """
+        5% of 333 is 16.65 units. The grid used to demand an exact whole
+        number and so reported "no award" for a model that plainly has
+        one; each award now rounds to a whole unit.
+        """
+        csv = _write_csv(self, MCU_EVENT.replace("1000000", "333"))
+        _, out, _ = _cli("solve", csv, "--json", expect=EXIT_OK)
+        result = json.loads(out)
+        self.assertEqual(result["tco"], 29_043)
+        qty = sum(s["qty"] for s in result["allocations"][0]["suppliers"])
+        self.assertEqual(qty, 333)
+
+    def test_an_odd_million_is_gridded_too(self):
+        # No percentage step divides 999,999 — this used to fall back to an
+        # unbounded search and never return.
+        csv = _write_csv(self, MCU_EVENT.replace("1000000", "999999"))
+        _, out, _ = _cli("solve", csv, "--json", expect=EXIT_OK)
+        # CNS: 20% of 999,999 is 199,999.8, so 199,999 at 80; ti: 800,000 at 89.
+        self.assertEqual(json.loads(out)["tco"], 199_999 * 80 + 800_000 * 89)
+
+    def test_a_small_part_is_not_made_worse_by_the_grid(self):
+        # 5% of tiny.csv's parts is at most one unit, so the grid must not
+        # cost anything: the exact optimum is 367.
+        _, out, _ = _cli("solve", TINY, "--json", expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 367)
+
+    def test_the_default_grid_is_dropped_rather_than_blamed(self):
+        """
+        A 12-13% share band has no 5% level. The grid is a speed setting,
+        not the buyer's rule, so it must not produce "no award satisfies
+        every rule" — the search covers every quantity instead, and says so.
+        """
+        csv = _write_csv(self, (
+            "part,supplier,demand,unit_cost,share_min,share_max\n"
+            "bolt,alpha,100,10,12,13\n"
+            "bolt,beta,100,12,,\n"
+        ))
+        _, out, err = _cli("solve", csv, "--json", expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 13 * 10 + 87 * 12)
+        self.assertIn("every quantity was searched", err)
+
+    def test_a_grid_set_in_the_file_is_a_rule_and_stays(self):
+        csv = _write_csv(self, (
+            "part,supplier,demand,unit_cost,share_min,share_max,share_increment\n"
+            "bolt,alpha,100,10,12,13,5\n"
+            "bolt,beta,100,12,,,\n"
+        ))
+        _cli("solve", csv, "--increment", "0", expect=EXIT_NO_ANSWER)
+
+    def test_a_step_that_does_not_divide_100_is_rejected(self):
+        _, _, err = _cli("solve", TINY, "--increment", "7",
+                         expect=EXIT_BAD_INPUT)
+        self.assertIn("must divide 100", err)
+
+    def test_the_report_states_the_grid_it_used(self):
+        """
+        The document outlives the conversation, so it cannot inherit a
+        claim of proven optimality it did not earn.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = os.path.join(tmp, "award.html")
+            _cli("report", _write_csv(self, MCU_EVENT), "-o", out_path,
+                 expect=EXIT_OK)
+            html = pathlib.Path(out_path).read_text(encoding="utf-8")
+        self.assertIn("5% steps, rounded to whole", html)
+        self.assertNotIn("not an estimate, and not a heuristic", html)
+
+
+@unittest.skipUnless(AVAILABLE, "SWI-Prolog / janus-swi not installed")
+class TestRealisticEvents(unittest.TestCase):
+    """
+    The fixtures elsewhere are small and lower-case. Real sourcing data is
+    neither, and that is where the tool used to hang or crash. These keep
+    it honest on the shape of data a buyer actually has.
+    """
+
+    def _event(self, suppliers: int, demand: int) -> str:
+        rows = [
+            f"MCU-{demand},SUP{i},{demand},{100 - 3 * i},,"
+            f"{'20' if i == suppliers - 1 else ''},{'1' if i == 0 else ''}\n"
+            for i in range(suppliers)
+        ]
+        return _write_csv(self, (
+            "part,supplier,demand,unit_cost,share_min,share_max,dual_source\n"
+            + "".join(rows)
+        ))
+
+    def test_eight_suppliers_on_a_million_units_both_ways(self):
+        """
+        Exact and gridded both finish — this used to depend on which
+        supplier's name sorted first — and here they agree, because the
+        cheapest supplier's 20% cap lands on a step.
+        """
+        csv = self._event(8, 1_000_000)
+        for increment in ("0", "5"):
+            with self.subTest(increment=increment):
+                _, out, _ = _cli("solve", csv, "--json",
+                                 "--increment", increment, expect=EXIT_OK)
+                self.assertEqual(json.loads(out)["tco"], 81_400_000)
+
+    def test_exact_search_finishes_whatever_the_supplier_names(self):
+        # Same model as MCU_EVENT with the grid off. It ran past two minutes
+        # while an identical model with other names finished instantly.
+        _, out, _ = _cli("solve", _write_csv(self, MCU_EVENT), "--json",
+                         "--increment", "0", expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 87_200_000)
+
+    def test_the_trace_of_a_million_units_stays_readable(self):
+        """
+        Each snapshot used to list every value still open: 103 MB and 16
+        seconds for this model, and the report embeds the trace. Ranges
+        are summarised; the full list is kept only while it is short.
+        """
+        _, out, _ = _cli("trace", _write_csv(self, MCU_EVENT), expect=EXIT_OK)
+        self.assertLess(len(out), 50_000)
+        snapshot = json.loads(out.splitlines()[1])
+        cns = next(v for v in snapshot["vars"] if v["name"] == "q.CNS.ABC")
+        self.assertEqual((cns["min"], cns["max"], cns["size"]),
+                         (0, 200_000, 200_001))
+        self.assertNotIn("domain", cns)
+
+    def test_a_short_range_still_lists_its_values(self):
+        _, out, _ = _cli("trace", TINY, expect=EXIT_OK)
+        snapshot = json.loads(out.splitlines()[1])
+        first = snapshot["vars"][0]
+        self.assertEqual(len(first["domain"]), first["size"])
+
+    def test_uppercase_names_work_in_every_kind_of_override(self):
+        scenarios = [
+            {"name": "baseline", "overrides": []},
+            {"name": "TI 70 / IFX 30", "overrides": [
+                {"set": "share(ABC,ti,70,70)"},
+                {"set": "share(ABC,infineon,30,30)"}]},
+            {"name": "CNS +10%", "overrides": [
+                {"cost_delta": ["CNS", "ABC", 10]}]},
+            {"name": "no dual source", "overrides": [
+                {"remove": "dual_source(ABC)"}]},
+            {"name": "ABC -50%", "overrides": [
+                {"demand_delta": ["ABC", -50]}]},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.json")
+            pathlib.Path(path).write_text(json.dumps(scenarios))
+            _, out, _ = _cli("scenarios", _write_csv(self, MCU_EVENT),
+                             "--scenarios-file", path, "--json",
+                             expect=EXIT_OK)
+        tco = {r["name"]: r["tco"] for r in json.loads(out)["results"]}
+        self.assertEqual(tco, {
+            "baseline": 87_200_000,
+            "TI 70 / IFX 30": 92_300_000,
+            "CNS +10%": 88_800_000,
+            "no dual source": 87_200_000,
+            "ABC -50%": 43_600_000,
+        })
+
+    def test_a_wildcard_in_a_remove_template_still_matches_anything(self):
+        csv = _write_csv(self, (
+            "part,supplier,demand,unit_cost,share_max,dual_source,global_share_cap\n"
+            "ABC,infineon,1000000,100,,1,\n"
+            "ABC,ti,1000000,89,,,50\n"
+            "ABC,CNS,1000000,80,20,,\n"
+        ))
+        scenarios = [{"name": "base"},
+                     {"name": "uncapped", "overrides": [
+                         {"remove": "max_global_share(ti,_)"}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.json")
+            pathlib.Path(path).write_text(json.dumps(scenarios))
+            _, out, _ = _cli("scenarios", csv, "--scenarios-file", path,
+                             "--json", expect=EXIT_OK)
+        base, uncapped = json.loads(out)["results"]
+        self.assertGreater(base["tco"], uncapped["tco"])
+
+    def test_an_unknown_override_is_rejected_not_ignored(self):
+        # It used to be dropped silently: a scenario that changed nothing,
+        # reported as if it had.
+        _, _, err = _cli("scenarios", _write_csv(self, MCU_EVENT),
+                         "--scenario", 'typo:[{"cost_detla": ["CNS","ABC",10]}]',
+                         expect=EXIT_BAD_INPUT)
+        self.assertIn("is not an override", err)
+
+    def test_a_decimal_percentage_is_rejected(self):
+        _, _, err = _cli("scenarios", _write_csv(self, MCU_EVENT),
+                         "--scenario", 'up:[{"cost_delta": ["CNS","ABC",2.5]}]',
+                         expect=EXIT_BAD_INPUT)
+        self.assertIn("whole numbers", err)
+
+    def test_an_unreadable_fact_is_rejected_before_solving(self):
+        _, _, err = _cli("scenarios", _write_csv(self, MCU_EVENT),
+                         "--scenario", 'bad:[{"set": "share(ABC,ti,70"}]',
+                         expect=EXIT_BAD_INPUT)
+        self.assertIn("set needs", err)
+        self.assertNotIn("Traceback", err)
+
+
+@unittest.skipUnless(AVAILABLE, "SWI-Prolog / janus-swi not installed")
+class TestSpreadsheetInput(unittest.TestCase):
+    """
+    Files that come out of Excel. Each of these used to fail with a Prolog
+    message — or a bare "could not parse" — that named neither the cell
+    nor the fix.
+    """
+
+    def test_titled_headings_are_read(self):
+        csv = _write_csv(self, "Part,Supplier,Demand,Unit Cost\n"
+                               "ABC,TI,100,89\nABC,CNS,100,80\n")
+        _, out, _ = _cli("solve", csv, "--json", expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 8000)
+
+    def test_a_byte_order_mark_is_harmless(self):
+        csv = _write_csv(self, "\ufeffpart,supplier,demand,unit_cost\r\n"
+                               "ABC,TI,100,89\r\n")
+        _, out, _ = _cli("solve", csv, "--json", expect=EXIT_OK)
+        self.assertEqual(json.loads(out)["tco"], 8900)
+
+    def test_a_short_row_names_its_line(self):
+        csv = _write_csv(self, "part,supplier,demand,unit_cost,capacity\n"
+                               "ABC,TI,100,89\n")
+        _, _, err = _cli("solve", csv, expect=EXIT_BAD_INPUT)
+        self.assertIn("line 2 has 4 values but the header has 5", err)
+
+    def test_formatted_numbers_name_the_cell(self):
+        csv = _write_csv(self, 'part,supplier,demand,unit_cost\n'
+                               'ABC,TI,"1,000,000",89\n')
+        _, _, err = _cli("solve", csv, expect=EXIT_BAD_INPUT)
+        self.assertIn("demand for TI/ABC is '1,000,000'", err)
+
+    def test_a_file_without_part_and_supplier_says_so(self):
+        csv = _write_csv(self, "item,vendor,qty\nABC,TI,100\n")
+        _, _, err = _cli("solve", csv, expect=EXIT_BAD_INPUT)
+        self.assertIn("needs part and supplier columns", err)
+        self.assertIn("found: item, vendor, qty", err)
+
+
+@unittest.skipUnless(AVAILABLE, "SWI-Prolog / janus-swi not installed")
+class TestRules(unittest.TestCase):
+    """The model read back, so a sign-off is on the rules that run."""
+
+    def test_reads_back_what_the_buyer_wrote(self):
+        _, out, err = _cli("rules", _write_csv(self, MCU_EVENT),
+                           expect=EXIT_OK)
+        self.assertIn("ABC — buy 1,000,000", out)
+        self.assertIn("at least 2 suppliers (dual sourcing)", out)
+        self.assertIn("at most 20% of the part", out)
+        self.assertIn("awards in 5% steps", out)
+        self.assertEqual(err, "")  # nothing is solved, so nothing to qualify
+
+    def test_shows_what_the_file_implies_but_does_not_say(self):
+        # supplier2 quotes 10 but carries a +3 adjustment; the solver prices
+        # it at 13, and a buyer signing off should see that.
+        _, out, _ = _cli("rules", SAMPLE, "--increment", "0", expect=EXIT_OK)
+        self.assertIn("effective 13", out)
+        self.assertIn("one-off 2,000 if awarded", out)
+        self.assertIn("at most 40% of total volume", out)
+
+    def test_names_the_reason_a_supplier_is_excluded(self):
+        csv = _write_csv(self, (
+            "part,supplier,demand,unit_cost,otif,min_otif\n"
+            "ABC,TI,100,10,85,90\n"
+            "ABC,CNS,100,12,95,\n"
+        ))
+        _, out, _ = _cli("rules", csv, expect=EXIT_OK)
+        self.assertIn("EXCLUDED — on-time delivery is 85%, below the "
+                      "required 90%", out)
+
+    def test_json_carries_real_booleans(self):
+        _, out, _ = _cli("rules", _write_csv(self, MCU_EVENT), "--json",
+                         expect=EXIT_OK)
+        part = json.loads(out)["parts"][0]
+        self.assertIs(part["dual_source"], True)
+        self.assertIs(part["quotes"][0]["qualified"], True)
 
 
 if __name__ == "__main__":
